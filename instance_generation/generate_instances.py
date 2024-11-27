@@ -287,6 +287,7 @@ if not dont_generate_instances:
                 max_duration_small,
                 small_session_files_choice,
                 small_instance_file,
+                session_insertion_method="MAX"
             )
         )
         instance_tasks.append(
@@ -296,6 +297,7 @@ if not dont_generate_instances:
                 max_duration_medium,
                 medium_session_files_choice,
                 medium_instance_file,
+                session_insertion_method="MAX"
             )
         )
         instance_tasks.append(
@@ -305,6 +307,7 @@ if not dont_generate_instances:
                 max_duration_big,
                 big_session_files_choice,
                 big_instance_file,
+                session_insertion_method="MAX"
             )
         )
 

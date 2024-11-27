@@ -171,7 +171,7 @@ def set_categorical_event(df):
     df["event"] = df["event"].astype(event_order)
 
 @ray.remote
-def generate_instance(instance_number, max_parallel_sessions, stop_time, session_files, instance_file):
+def generate_instance(instance_number, max_parallel_sessions, stop_time, session_files, instance_file, session_insertion_method="ACTIVE"):
     max_time = stop_time * 3  # 3 times the duration of the longest session
     print(
         f"Generating instance {instance_number} with {len(session_files)} session types, max parallel sessions: {max_parallel_sessions}, soft max duration: {max_time}"
@@ -190,12 +190,14 @@ def generate_instance(instance_number, max_parallel_sessions, stop_time, session
     session_df["repeat"] = 0
     current_repeat = 0
     active_sessions = 1
-    time_wait_sessions = [
-        session_df["timestamp"].iloc[-1]
-    ]  # queue of sessions to wait for, will always use the first element for calculating time to wait
-
+    if session_insertion_method == "ACTIVE":
+        time_wait_sessions = [
+            session_df["timestamp"].iloc[-1]
+        ]  # queue of sessions to wait for, will always use the first element for calculating time to wait
+    elif session_insertion_method == "MAX":
+        time_wait_sessions = [stop_time]
     # between 5% and 10% of sessions' duration is the time to wait for the next session to start
-    time_wait_for_next_session_chance = np.random.uniform(5, 10) / 100
+    time_wait_for_next_session_chance = np.random.uniform(1, 5) / 100
     time_wait_for_next_session = (
         time_wait_sessions[0] * time_wait_for_next_session_chance
     )
@@ -220,7 +222,8 @@ def generate_instance(instance_number, max_parallel_sessions, stop_time, session
                 or repeat not in session_df["repeat"].values
             ):
                 active_sessions -= 1
-                time_wait_sessions.remove(actual_time)
+                if session_insertion_method == "ACTIVE":
+                    time_wait_sessions.remove(actual_time)
         if session_df.empty:
             # if the session no longer exists, we need to wait for the next session
             current_time = time_wait_for_next_session
@@ -244,7 +247,8 @@ def generate_instance(instance_number, max_parallel_sessions, stop_time, session
             new_session_df["timestamp"] = new_session_df["timestamp"] + current_time
             new_session_df["session"] = session_idx
             new_session_df["repeat"] = current_repeat
-            time_wait_sessions.append(new_session_df["timestamp"].iloc[-1])
+            if session_insertion_method == "ACTIVE":
+                time_wait_sessions.append(new_session_df["timestamp"].iloc[-1])
             session_df = pd.concat([session_df, new_session_df]).sort_values(
                 by=["timestamp", "event"]
             )
