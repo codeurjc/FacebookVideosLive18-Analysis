@@ -160,11 +160,8 @@ def set_categorical_event(df):
 def generate_instance(instance_number, max_parallel_sessions_max, stop_time, session_files, instance_file, session_insertion_method="ACTIVE"):
     max_time = stop_time * 3  # 3 times the duration of the longest session
     current_time = 0
-    instance_rows = {"event": [], "id": [], "timestamp": [], "repeat": []}
 
-    session_idx = rng.integers(
-        len(session_files)
-    )  # first session is a random session
+    session_idx = rng.integers(len(session_files))  # first session is a random session
     used_sessions = set()
     session = session_files[session_idx]
     session_df = pd.read_csv(session)
@@ -197,80 +194,82 @@ def generate_instance(instance_number, max_parallel_sessions_max, stop_time, ses
         n_sessions = max_time / (max_parallel_sessions_max ** 2)
         print(f"Instance {instance_number}: Proportional time range between sessions: {n_sessions / 2} - {n_sessions}")
         time_wait_for_next_session = rng.uniform(n_sessions / 2, n_sessions)
-    # while we have not reached the end of the simulation time add events
-    while current_time <= max_time:
-        print(f"Instance {instance_number}: Active sessions: {active_sessions}")
-        actual_time = session_df.iloc[0]["timestamp"]
-        # add events until there are none or we reach the time to wait for the next session
-        print(f"Instance {instance_number}: Next session time: {time_wait_for_next_session}")
-        while not session_df.empty and actual_time <= time_wait_for_next_session:
-            first_row = session_df.iloc[0]
-            event = first_row["event"]
-            instance_rows["event"].append(event)
-            instance_rows["id"].append(first_row["id"])
-            instance_rows["timestamp"].append(first_row["timestamp"])
-            actual_time = first_row["timestamp"]
-            session = first_row["session"]
-            repeat = first_row["repeat"]
-            instance_rows["repeat"].append(repeat) # TODO: this adds size to the instance file size, but it is useful for the evaluation, so it should be a script argument
-            session_df = session_df.iloc[1:]
-            # if a session is over it is removed from the active sessions
-            if event == 2:
-                active_sessions -= 1
-                print(f"Instance {instance_number}: Session {session} repeat {repeat} finished, active sessions: {active_sessions}")
+
+    buffer = []
+    buffer_size = 100000  # Adjust buffer size as needed
+
+    with open(instance_file, 'w') as f:
+        f.write("event,id,timestamp,repeat\n")
+        # while we have not reached the end of the simulation time add events
+        while current_time <= max_time:
+            print(f"Instance {instance_number}: Active sessions: {active_sessions}")
+            actual_time = session_df.iloc[0]["timestamp"]
+            # add events until there are none or we reach the time to wait for the next session
+            print(f"Instance {instance_number}: Next session time: {time_wait_for_next_session}")
+            while not session_df.empty and actual_time <= time_wait_for_next_session:
+                first_row = session_df.iloc[0]
+                event = first_row["event"]
+                buffer.append(f"{event},{first_row['id']},{first_row['timestamp']},{first_row['repeat']}\n")
+                if len(buffer) >= buffer_size:
+                    f.writelines(buffer)
+                    buffer = []
+                actual_time = first_row["timestamp"]
+                session = first_row["session"]
+                repeat = first_row["repeat"]
+                session_df = session_df.iloc[1:]
+                # if a session is over it is removed from the active sessions
+                if event == 2:
+                    active_sessions -= 1
+                    print(f"Instance {instance_number}: Session {session} repeat {repeat} finished, active sessions: {active_sessions}")
+                    if session_insertion_method == "ACTIVE":
+                        time_wait_sessions.remove(actual_time)
+            if session_df.empty:
+                print(f"Instance {instance_number}: No more events in the current session group")
+                # if the session no longer exists, we need to wait for the next session
+                current_time = time_wait_for_next_session
+            else:
+                current_time = actual_time
+
+            # if we can add a new session, we add it
+            if active_sessions < max_parallel_sessions:
+                print(f"Instance {instance_number}: Adding new session at time {current_time}")
+                # previous session is already used
+                used_sessions.add(session_idx)
+                if len(used_sessions) == len(session_files):
+                    # if there are no more sessions available we can start using previous ones (marked)
+                    current_repeat += 1
+                    print(f"Instance {instance_number}: All sessions used, start new repeat {current_repeat}")
+                    used_sessions = set()
+                while session_idx in used_sessions:
+                    # get a new unused session
+                    session_idx = rng.integers(len(session_files))
+                new_session = session_files[session_idx]
+                new_session_df = pd.read_csv(new_session)
+                set_categorical_event(new_session_df)
+                new_session_df["timestamp"] = new_session_df["timestamp"] + current_time
+                new_session_df["session"] = session_idx
+                new_session_df["repeat"] = current_repeat
                 if session_insertion_method == "ACTIVE":
-                    time_wait_sessions.remove(actual_time)
-        if session_df.empty:
-            print(f"Instance {instance_number}: No more events in the current session group")
-            # if the session no longer exists, we need to wait for the next session
-            current_time = time_wait_for_next_session
-        else:
-            current_time = actual_time
+                    time_wait_sessions.append(new_session_df["timestamp"].iloc[-1])
+                session_df = pd.concat([session_df, new_session_df]).sort_values(
+                    by=["timestamp", "event"]
+                )
+                active_sessions += 1
 
-        # if we can add a new session, we add it
-        if active_sessions < max_parallel_sessions:
-            print(f"Instance {instance_number}: Adding new session at time {current_time}")
-            # previous session is already used
-            used_sessions.add(session_idx)
-            if len(used_sessions) == len(session_files):
-                # if there are no more sessions available we can start using previous ones (marked)
-                current_repeat += 1
-                print(f"Instance {instance_number}: All sessions used, start new repeat {current_repeat}")
-                used_sessions = set()
-            while session_idx in used_sessions:
-                # get a new unused session
-                session_idx = rng.integers(len(session_files))
-            new_session = session_files[session_idx]
-            new_session_df = pd.read_csv(new_session)
-            set_categorical_event(new_session_df)
-            new_session_df["timestamp"] = new_session_df["timestamp"] + current_time
-            new_session_df["session"] = session_idx
-            new_session_df["repeat"] = current_repeat
-            if session_insertion_method == "ACTIVE":
-                time_wait_sessions.append(new_session_df["timestamp"].iloc[-1])
-            session_df = pd.concat([session_df, new_session_df]).sort_values(
-                by=["timestamp", "event"]
-            )
-            active_sessions += 1
-
-        max_parallel_sessions = rng.integers(max_parallel_sessions_max / 2, max_parallel_sessions_max + 1)
-        # get a new the time to wait for the next session
-        if session_insertion_method == "PROPORTIONAL":
-            time_wait_for_next_session = rng.uniform(n_sessions / 2, n_sessions) + current_time
-        else:
-            time_wait_for_next_session_chance = rng.uniform(5, 10) / 100
-            time_wait_for_next_session = (
-                time_wait_sessions[0] * time_wait_for_next_session_chance + current_time
-            )
-    print(f"Instance {instance_number}: End of simulation time reached")
-    # finish existing sessions that are not finished
-    while not session_df.empty:
-        instance_rows["event"].append(session_df.iloc[0]["event"])
-        instance_rows["id"].append(session_df.iloc[0]["id"])
-        instance_rows["timestamp"].append(session_df.iloc[0]["timestamp"])
-        instance_rows["repeat"].append(session_df.iloc[0]["repeat"])
-        session_df = session_df.iloc[1:]
-
-    final_df = pd.DataFrame(instance_rows)
-    final_df.to_csv(instance_file, index=False)
+            max_parallel_sessions = rng.integers(max_parallel_sessions_max / 2, max_parallel_sessions_max + 1)
+            # get a new the time to wait for the next session
+            if session_insertion_method == "PROPORTIONAL":
+                time_wait_for_next_session = rng.uniform(n_sessions / 2, n_sessions) + current_time
+            else:
+                time_wait_for_next_session_chance = rng.uniform(5, 10) / 100
+                time_wait_for_next_session = (
+                    time_wait_sessions[0] * time_wait_for_next_session_chance + current_time
+                )
+        print(f"Instance {instance_number}: End of simulation time reached")
+        # finish existing sessions that are not finished
+        while not session_df.empty:
+            buffer.append(f"{session_df.iloc[0]['event']},{session_df.iloc[0]['id']},{session_df.iloc[0]['timestamp']},{session_df.iloc[0]['repeat']}\n")
+            session_df = session_df.iloc[1:]
+        if buffer:
+            f.writelines(buffer)
     print(f"Instance {instance_number}: Instance {instance_number} generated")
