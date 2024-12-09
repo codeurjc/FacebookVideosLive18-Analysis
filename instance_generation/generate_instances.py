@@ -236,7 +236,7 @@ if not dont_generate_instances:
     print("Generating instances...")
 
     instance_tasks = []
-    for i in range(5):
+    for i in range(40):
         small_instance_size = rng.integers(10, 21)
         medium_instance_size = rng.integers(30, 51)
         big_instance_size = int(
