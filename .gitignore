@@ -2,5 +2,6 @@ data/*
 sessions/*
 instances/*
 instance_generation/__pycache__/*
+simulated/*
 *.log
 *.pkl
