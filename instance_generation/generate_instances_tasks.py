@@ -160,15 +160,16 @@ def set_categorical_event(df):
 def generate_instance(instance_number, max_parallel_sessions_max, stop_time, session_files, instance_file, session_insertion_method="ACTIVE"):
     max_time = stop_time * 3  # 3 times the duration of the longest session
     current_time = 0
-
-    session_idx = rng.integers(len(session_files))  # first session is a random session
-    used_sessions = set()
-    session = session_files[session_idx]
+    session_files_list = session_files.copy()
+    session_idx = rng.integers(len(session_files_list))  # first session is a random session
+    session = session_files_list.pop(session_idx)
     session_df = pd.read_csv(session)
     set_categorical_event(session_df)
     session_df["session"] = session_idx
     session_df["repeat"] = 0
-    current_repeat = 0
+    repeats_map = {
+        session: 0
+    }
     active_sessions = 1
     max_parallel_sessions = rng.integers(max_parallel_sessions_max / 2, max_parallel_sessions_max + 1)
     print(
@@ -233,22 +234,22 @@ def generate_instance(instance_number, max_parallel_sessions_max, stop_time, ses
             # if we can add a new session, we add it
             if active_sessions < max_parallel_sessions:
                 print(f"Instance {instance_number}: Adding new session at time {current_time}")
-                # previous session is already used
-                used_sessions.add(session_idx)
-                if len(used_sessions) == len(session_files):
+                if len(session_files_list) == 0:
                     # if there are no more sessions available we can start using previous ones (marked)
-                    current_repeat += 1
-                    print(f"Instance {instance_number}: All sessions used, start new repeat {current_repeat}")
-                    used_sessions = set()
-                while session_idx in used_sessions:
-                    # get a new unused session
-                    session_idx = rng.integers(len(session_files))
-                new_session = session_files[session_idx]
+                    session_files_list = session_files.copy()
+                    print(f"Instance {instance_number}: All sessions used, repeating sessions")
+                # get a new unused session
+                session_idx = rng.integers(len(session_files_list))
+                new_session = session_files_list.pop(session_idx)
+                if new_session in repeats_map:
+                    repeats_map[new_session] += 1
+                else:
+                    repeats_map[new_session] = 0
                 new_session_df = pd.read_csv(new_session)
                 set_categorical_event(new_session_df)
                 new_session_df["timestamp"] = new_session_df["timestamp"] + current_time
                 new_session_df["session"] = session_idx
-                new_session_df["repeat"] = current_repeat
+                new_session_df["repeat"] = repeats_map[new_session]
                 if session_insertion_method == "ACTIVE":
                     time_wait_sessions.append(new_session_df["timestamp"].iloc[-1])
                 session_df = pd.concat([session_df, new_session_df]).sort_values(
