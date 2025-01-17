@@ -170,10 +170,12 @@ def generate_instance(instance_number, max_parallel_sessions_max, stop_time, ses
         session: 0
     }
     active_sessions = 1
-    max_parallel_sessions = rng.integers(max_parallel_sessions_max / 2, max_parallel_sessions_max + 1)
+    max_parallel_sessions_lower_bound = int(max_parallel_sessions_max / 2)
+    max_parallel_sessions = rng.integers(max_parallel_sessions_lower_bound, max_parallel_sessions_max + 1)
     print(
-        f"Instance {instance_number}: Generating instance {instance_number} with {len(session_files)} session types, max parallel sessions: {max_parallel_sessions_max / 2}-{max_parallel_sessions_max}, soft max duration: {max_time}"
+        f"Instance {instance_number}: Generating instance {instance_number} with {len(session_files)} session types, max parallel sessions range: {max_parallel_sessions_lower_bound}-{max_parallel_sessions_max}, soft max duration: {max_time}"
     )
+    print(f"Max parallel sessions: {max_parallel_sessions}")
     if session_insertion_method == "ACTIVE":
         time_wait_sessions = [
             session_df["timestamp"].iloc[-1]
@@ -254,7 +256,8 @@ def generate_instance(instance_number, max_parallel_sessions_max, stop_time, ses
                 )
                 active_sessions += 1
 
-            max_parallel_sessions = rng.integers(max_parallel_sessions_max / 2, max_parallel_sessions_max + 1)
+            max_parallel_sessions = rng.integers(max_parallel_sessions_lower_bound, max_parallel_sessions_max + 1)
+            print(f"New max parallel sessions: {max_parallel_sessions}")
             # get a new the time to wait for the next session
             if session_insertion_method == "PROPORTIONAL":
                 time_wait_for_next_session = rng.uniform(n_sessions / 2, n_sessions) + current_time
