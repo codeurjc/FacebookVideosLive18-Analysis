@@ -160,7 +160,7 @@ def set_categorical_event(df):
 def generate_instance(instance_number, max_parallel_sessions_max, stop_time, session_files, instance_file, session_insertion_method="ACTIVE"):
     max_time = stop_time * 3  # 3 times the duration of the longest session
     current_time = 0
-    session_files_list = session_files.copy()
+    session_files_list = list(session_files.copy())
     session_idx = rng.integers(len(session_files_list))  # first session is a random session
     session = session_files_list.pop(session_idx)
     session_df = pd.read_csv(session)
@@ -236,7 +236,7 @@ def generate_instance(instance_number, max_parallel_sessions_max, stop_time, ses
                 print(f"Instance {instance_number}: Adding new session at time {current_time}")
                 if len(session_files_list) == 0:
                     # if there are no more sessions available we can start using previous ones (marked)
-                    session_files_list = session_files.copy()
+                    session_files_list = list(session_files.copy())
                     print(f"Instance {instance_number}: All sessions used, repeating sessions")
                 # get a new unused session
                 session_idx = rng.integers(len(session_files_list))
