@@ -165,7 +165,6 @@ def generate_instance(instance_number, max_parallel_sessions_max, stop_time, ses
     session = session_files_list.pop(session_idx)
     session_df = pd.read_csv(session)
     set_categorical_event(session_df)
-    session_df["session"] = session_idx
     session_df["repeat"] = 0
     repeats_map = {
         session: 0
@@ -215,13 +214,12 @@ def generate_instance(instance_number, max_parallel_sessions_max, stop_time, ses
                     f.writelines(buffer)
                     buffer = []
                 actual_time = first_row["timestamp"]
-                session = first_row["session"]
                 repeat = first_row["repeat"]
                 session_df = session_df.iloc[1:]
                 # if a session is over it is removed from the active sessions
                 if event == 2:
                     active_sessions -= 1
-                    print(f"Instance {instance_number}: Session {session} repeat {repeat} finished, active sessions: {active_sessions}")
+                    print(f"Instance {instance_number}: Session {first_row['id']} repeat {repeat} finished, active sessions: {active_sessions}")
                     if session_insertion_method == "ACTIVE":
                         time_wait_sessions.remove(actual_time)
             if session_df.empty:
@@ -248,7 +246,6 @@ def generate_instance(instance_number, max_parallel_sessions_max, stop_time, ses
                 new_session_df = pd.read_csv(new_session)
                 set_categorical_event(new_session_df)
                 new_session_df["timestamp"] = new_session_df["timestamp"] + current_time
-                new_session_df["session"] = session_idx
                 new_session_df["repeat"] = repeats_map[new_session]
                 if session_insertion_method == "ACTIVE":
                     time_wait_sessions.append(new_session_df["timestamp"].iloc[-1])
