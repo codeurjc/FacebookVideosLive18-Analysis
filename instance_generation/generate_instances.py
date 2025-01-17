@@ -225,41 +225,40 @@ if not dont_generate_instances:
     max_duration_medium = None
     max_duration_big = None
 
-    # print("Calculating max durations for instances...")
-    # max_duration_small, max_file_small = get_max_duration(small_session_files)
-    # print("Max duration small instances:", max_duration_small, max_file_small)
-    # max_duration_medium, max_file_med = get_max_duration(medium_session_files, max_duration_small)
-    # print("Max duration medium instances:", max_duration_medium, max_file_med)
-    # max_duration_big, max_file_big = get_max_duration(big_session_files, max_duration_medium)
-    # print("Max duration big instances:", max_duration_big, max_file_big)
-
     print("Generating instances...")
 
     instance_tasks = []
-    for i in range(40):
-        small_instance_size = rng.integers(10, 21)
-        medium_instance_size = rng.integers(30, 51)
-        big_instance_size = int(
-            np.ceil(
-                0.8
-                * (
-                    len(small_session_files)
-                    + len(medium_session_files)
-                    + len(big_session_files)
-                )
-            )
-        )
-
-        small_instance_max_parallel_sessions_max = rng.integers(5, 11)
-        medium_instance_max_parallel_sessions_max = rng.integers(20, 51)
-        big_instance_max_parallel_sessions_max = rng.integers(100, 201)
-
+    n_instances = 40
+    small_min_size = 10
+    small_max_size = 20
+    medium_min_size = 30
+    medium_max_size = 50
+    for i in range(n_instances):
+        small_instance_size = rng.integers(small_min_size, small_max_size + 1)
         small_session_files_choice = rng.choice(
             small_session_files, small_instance_size, replace=False
         )
+        small_instance_max_parallel_sessions_max = rng.integers(5, 11)
         max_duration_small = get_max_duration.remote(small_session_files_choice)
         small_instance_file = f"instances/instances-small/instance-small-{i}.csv"
+        instance_tasks.append(
+            generate_instance.remote(
+                f"small-{i}",
+                small_instance_max_parallel_sessions_max,
+                max_duration_small,
+                small_session_files_choice,
+                small_instance_file,
+                session_insertion_method="PROPORTIONAL"
+            )
+        )
 
+    for i in range(n_instances):
+        small_instance_size = rng.integers(small_min_size, small_max_size + 1)
+        medium_instance_size = rng.integers(medium_min_size, medium_max_size + 1)
+        small_session_files_choice = rng.choice(
+            small_session_files, small_instance_size, replace=False
+        )
+        medium_instance_max_parallel_sessions_max = rng.integers(20, 51)
         # force 40% of the total instance session size to be from medium sized sessions
         num_medium_files = int(np.ceil(0.4 * medium_instance_size))
         num_other_files = medium_instance_size - num_medium_files
@@ -275,6 +274,37 @@ if not dont_generate_instances:
 
         max_duration_medium = get_max_duration.remote(medium_session_files_choice)
         medium_instance_file = f"instances/instances-medium/instance-medium-{i}.csv"
+        instance_tasks.append(
+            generate_instance.remote(
+                f"medium-{i}",
+                medium_instance_max_parallel_sessions_max,
+                max_duration_medium,
+                medium_session_files_choice,
+                medium_instance_file,
+                session_insertion_method="PROPORTIONAL"
+            )
+        )
+
+    for i in range(n_instances):
+        small_instance_size = rng.integers(small_min_size, small_max_size + 1)
+        medium_instance_size = rng.integers(medium_min_size, medium_max_size + 1)
+        big_instance_size = int(
+            np.ceil(
+                0.8
+                * (
+                    len(small_session_files)
+                    + len(medium_session_files)
+                    + len(big_session_files)
+                )
+            )
+        )
+
+        big_instance_max_parallel_sessions_max = rng.integers(100, 201)
+
+        small_session_files_choice = rng.choice(
+            small_session_files, small_instance_size, replace=False
+        )
+
 
         # force 40% of the total instance session size to be from big sized sessions and 20% from medium sized sessions
         num_big_files = int(np.ceil(0.4 * big_instance_size))
@@ -298,26 +328,6 @@ if not dont_generate_instances:
         max_duration_big = get_max_duration.remote(big_session_files_choice)
         big_instance_file = f"instances/instances-big/instance-big-{i}.csv"
 
-        instance_tasks.append(
-            generate_instance.remote(
-                f"small-{i}",
-                small_instance_max_parallel_sessions_max,
-                max_duration_small,
-                small_session_files_choice,
-                small_instance_file,
-                session_insertion_method="PROPORTIONAL"
-            )
-        )
-        instance_tasks.append(
-            generate_instance.remote(
-                f"medium-{i}",
-                medium_instance_max_parallel_sessions_max,
-                max_duration_medium,
-                medium_session_files_choice,
-                medium_instance_file,
-                session_insertion_method="PROPORTIONAL"
-            )
-        )
         instance_tasks.append(
             generate_instance.remote(
                 f"big-{i}",
