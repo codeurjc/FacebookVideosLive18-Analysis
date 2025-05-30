@@ -4,3 +4,6 @@ numpy
 matplotlib
 seaborn
 ray
+networkx
+plotly
+dash
