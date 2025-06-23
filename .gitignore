@@ -5,3 +5,5 @@ instance_generation/__pycache__/*
 simulated/*
 *.log
 *.pkl
+irace_results/*
+old_irace_results/*

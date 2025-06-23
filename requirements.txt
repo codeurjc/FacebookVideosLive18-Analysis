@@ -7,3 +7,5 @@ ray
 networkx
 plotly
 dash
+rpy2
+statsmodels
