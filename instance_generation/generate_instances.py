@@ -299,7 +299,7 @@ if not dont_generate_instances:
             )
         )
 
-        big_instance_max_parallel_sessions_max = rng.integers(100, 201)
+        big_instance_max_parallel_sessions_max = rng.integers(20, 41)
 
         small_session_files_choice = rng.choice(
             small_session_files, small_instance_size, replace=False
