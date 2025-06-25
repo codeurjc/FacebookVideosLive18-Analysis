@@ -6,6 +6,7 @@ from generate_instances_tasks import (
     generate_session,
     generate_instance,
     get_max_duration,
+    validate_instance
 )
 import glob
 import argparse
@@ -227,7 +228,8 @@ if not dont_generate_instances:
 
     print("Generating instances...")
 
-    instance_tasks = []
+
+    validate_tasks = [] = []
     n_instances = 40
     small_min_size = 10
     small_max_size = 20
@@ -241,15 +243,16 @@ if not dont_generate_instances:
         small_instance_max_parallel_sessions_max = rng.integers(5, 11)
         max_duration_small = get_max_duration.remote(small_session_files_choice)
         small_instance_file = f"instances/instances-small/instance-small-{i}.csv"
-        instance_tasks.append(
-            generate_instance.remote(
+        small_instance_task = generate_instance.remote(
                 f"small-{i}",
                 small_instance_max_parallel_sessions_max,
                 max_duration_small,
                 small_session_files_choice,
                 small_instance_file,
                 session_insertion_method="PROPORTIONAL"
-            )
+        )
+        validate_tasks.append(
+            validate_instance.remote(small_instance_file)
         )
 
     for i in range(n_instances):
@@ -274,15 +277,16 @@ if not dont_generate_instances:
 
         max_duration_medium = get_max_duration.remote(medium_session_files_choice)
         medium_instance_file = f"instances/instances-medium/instance-medium-{i}.csv"
-        instance_tasks.append(
-            generate_instance.remote(
-                f"medium-{i}",
-                medium_instance_max_parallel_sessions_max,
-                max_duration_medium,
-                medium_session_files_choice,
-                medium_instance_file,
-                session_insertion_method="PROPORTIONAL"
-            )
+        medium_instance_task = generate_instance.remote(
+            f"medium-{i}",
+            medium_instance_max_parallel_sessions_max,
+            max_duration_medium,
+            medium_session_files_choice,
+            medium_instance_file,
+            session_insertion_method="PROPORTIONAL"
+        )
+        validate_tasks.append(
+            validate_instance.remote(medium_instance_file)
         )
 
     for i in range(n_instances):
@@ -328,18 +332,20 @@ if not dont_generate_instances:
         max_duration_big = get_max_duration.remote(big_session_files_choice)
         big_instance_file = f"instances/instances-big/instance-big-{i}.csv"
 
-        instance_tasks.append(
-            generate_instance.remote(
-                f"big-{i}",
-                big_instance_max_parallel_sessions_max,
-                max_duration_big,
-                big_session_files_choice,
-                big_instance_file,
-                session_insertion_method="PROPORTIONAL"
-            )
+        big_instance_task = generate_instance.remote(
+            f"big-{i}",
+            big_instance_max_parallel_sessions_max,
+            max_duration_big,
+            big_session_files_choice,
+            big_instance_file,
+            session_insertion_method="PROPORTIONAL"
         )
 
-    ray.get(instance_tasks)
+        validate_tasks.append(
+            validate_instance.remote(big_instance_file)
+        )
+
+    ray.get(validate_tasks)
     print("Instances generated")
 else:
     print("Skipping instance generation")

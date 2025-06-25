@@ -1,6 +1,7 @@
 import ray
 import pandas as pd
 import numpy as np
+import instance_generation.instance_validator as validator
 
 rng = np.random.default_rng()
 
@@ -274,3 +275,7 @@ def generate_instance(instance_number, max_parallel_sessions_max, stop_time, ses
         if buffer:
             f.writelines(buffer)
     print(f"Instance {instance_number}: Instance {instance_number} generated")
+
+@ray.remote
+def validate_instance(instance_file):
+    validator.validate_instance(instance_file)
