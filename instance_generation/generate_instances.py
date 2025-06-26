@@ -6,7 +6,7 @@ from generate_instances_tasks import (
     generate_session,
     generate_instance,
     get_max_duration,
-    validate_instance
+    validate_instance_file
 )
 import glob
 import argparse
@@ -220,132 +220,106 @@ if not dont_generate_instances:
     medium_session_files = glob.glob("sessions/session-medium/*.csv")
     big_session_files = glob.glob("sessions/session-big/*.csv")
 
-    n_instances_per_type = 40
-
     max_duration_small = None
     max_duration_medium = None
     max_duration_big = None
 
     print("Generating instances...")
 
-
-    validate_tasks = [] = []
-    n_instances = 40
+    n_instances = 6
     small_min_size = 10
     small_max_size = 20
     medium_min_size = 30
     medium_max_size = 50
-    for i in range(n_instances):
-        small_instance_size = rng.integers(small_min_size, small_max_size + 1)
-        small_session_files_choice = rng.choice(
-            small_session_files, small_instance_size, replace=False
-        )
-        small_instance_max_parallel_sessions_max = rng.integers(5, 11)
-        max_duration_small = get_max_duration.remote(small_session_files_choice)
-        small_instance_file = f"instances/instances-small/instance-small-{i}.csv"
-        small_instance_task = generate_instance.remote(
-                f"small-{i}",
-                small_instance_max_parallel_sessions_max,
-                max_duration_small,
-                small_session_files_choice,
-                small_instance_file,
+    
+    
+    def _batch_generate_validate(gen_tasks, label):
+        remaining = gen_tasks.copy()
+        validate_tasks = []
+        # Launch validation as each generation completes
+        while remaining:
+            done_refs, _ = ray.wait([t for (_, _, t) in remaining], num_returns=1)
+            done_ref = done_refs[0]
+            for idx, (i, file_path, gen_ref) in enumerate(remaining):
+                if gen_ref == done_ref:
+                    v_ref = validate_instance_file.remote(file_path)
+                    validate_tasks.append((i, file_path, v_ref))
+                    del remaining[idx]
+                    break
+        # Wait for all validations
+        v_refs = [v for (_, _, v) in validate_tasks]
+        results = ray.get(v_refs)
+        # Collect failures
+        next_pending = []
+        for (i, file_path, _), valid in zip(validate_tasks, results):
+            if not bool(valid):
+                print(f"Validation failed for {file_path} in {label}, retrying instance {i}")
+                next_pending.append(i)
+        return next_pending
+
+    # Generate and validate small instances in batches
+    pending = list(range(n_instances))
+    while pending:
+        gen_tasks = []
+        for i in pending:
+            file_path = f"instances/instances-small/instance-small-{i}.csv"
+            size = rng.integers(small_min_size, small_max_size + 1)
+            choice = rng.choice(small_session_files, size, replace=False)
+            parallel = rng.integers(5, 11)
+            dur_ref = get_max_duration.remote(choice)
+            task_ref = generate_instance.remote(
+                f"small-{i}", parallel, dur_ref, choice, file_path,
                 session_insertion_method="PROPORTIONAL"
-        )
-        validate_tasks.append(
-            validate_instance.remote(small_instance_file)
-        )
-
-    for i in range(n_instances):
-        small_instance_size = rng.integers(small_min_size, small_max_size + 1)
-        medium_instance_size = rng.integers(medium_min_size, medium_max_size + 1)
-        small_session_files_choice = rng.choice(
-            small_session_files, small_instance_size, replace=False
-        )
-        medium_instance_max_parallel_sessions_max = rng.integers(20, 51)
-        # force 40% of the total instance session size to be from medium sized sessions
-        num_medium_files = int(np.ceil(0.4 * medium_instance_size))
-        num_other_files = medium_instance_size - num_medium_files
-        medium_files_choice = rng.choice(
-            medium_session_files, num_medium_files, replace=False
-        )
-        other_files_choice = rng.choice(
-            medium_session_files + small_session_files, num_other_files, replace=False
-        )
-        medium_session_files_choice = np.concatenate(
-            (medium_files_choice, other_files_choice)
-        )
-
-        max_duration_medium = get_max_duration.remote(medium_session_files_choice)
-        medium_instance_file = f"instances/instances-medium/instance-medium-{i}.csv"
-        medium_instance_task = generate_instance.remote(
-            f"medium-{i}",
-            medium_instance_max_parallel_sessions_max,
-            max_duration_medium,
-            medium_session_files_choice,
-            medium_instance_file,
-            session_insertion_method="PROPORTIONAL"
-        )
-        validate_tasks.append(
-            validate_instance.remote(medium_instance_file)
-        )
-
-    for i in range(n_instances):
-        small_instance_size = rng.integers(small_min_size, small_max_size + 1)
-        medium_instance_size = rng.integers(medium_min_size, medium_max_size + 1)
-        big_instance_size = int(
-            np.ceil(
-                0.8
-                * (
-                    len(small_session_files)
-                    + len(medium_session_files)
-                    + len(big_session_files)
-                )
             )
-        )
+            gen_tasks.append((i, file_path, task_ref))
+        pending = _batch_generate_validate(gen_tasks, 'small')
+ 
+    # Generate and validate medium instances in batches
+    pending = list(range(n_instances))
+    while pending:
+        gen_tasks = []
+        for i in pending:
+            file_path = f"instances/instances-medium/instance-medium-{i}.csv"
+            small_size = rng.integers(small_min_size, small_max_size + 1)
+            med_size = rng.integers(medium_min_size, medium_max_size + 1)
+            parallel = rng.integers(20, 51)
+            num_med = int(np.ceil(0.4 * med_size))
+            num_other = med_size - num_med
+            med_ch = rng.choice(medium_session_files, num_med, replace=False)
+            oth_ch = rng.choice(medium_session_files + small_session_files, num_other, replace=False)
+            files = np.concatenate((med_ch, oth_ch))
+            dur_ref = get_max_duration.remote(files)
+            task_ref = generate_instance.remote(
+                f"medium-{i}", parallel, dur_ref, files, file_path,
+                session_insertion_method="PROPORTIONAL"
+            )
+            gen_tasks.append((i, file_path, task_ref))
+        pending = _batch_generate_validate(gen_tasks, 'medium')
+ 
+    # Generate and validate big instances in batches
+    pending = list(range(n_instances))
+    total_sessions = len(small_session_files) + len(medium_session_files) + len(big_session_files)
+    big_size = int(np.ceil(0.8 * total_sessions))
+    while pending:
+        gen_tasks = []
+        for i in pending:
+            file_path = f"instances/instances-big/instance-big-{i}.csv"
+            parallel = rng.integers(20, 41)
+            num_big = int(np.ceil(0.4 * big_size))
+            num_med = int(np.ceil(0.2 * big_size))
+            num_other = big_size - num_big - num_med
+            big_ch = rng.choice(big_session_files, num_big)
+            med_ch = rng.choice(medium_session_files, num_med)
+            oth_ch = rng.choice(big_session_files + medium_session_files + small_session_files, num_other, replace=False)
+            files = np.concatenate((big_ch, med_ch, oth_ch))
+            dur_ref = get_max_duration.remote(files)
+            task_ref = generate_instance.remote(
+                f"big-{i}", parallel, dur_ref, files, file_path,
+                session_insertion_method="PROPORTIONAL"
+            )
+            gen_tasks.append((i, file_path, task_ref))
+        pending = _batch_generate_validate(gen_tasks, 'big')
 
-        big_instance_max_parallel_sessions_max = rng.integers(20, 41)
-
-        small_session_files_choice = rng.choice(
-            small_session_files, small_instance_size, replace=False
-        )
-
-
-        # force 40% of the total instance session size to be from big sized sessions and 20% from medium sized sessions
-        num_big_files = int(np.ceil(0.4 * big_instance_size))
-        num_medium_files = int(np.ceil(0.2 * big_instance_size))
-        num_other_files = big_instance_size - num_big_files - num_medium_files
-        big_files_choice = rng.choice(
-            big_session_files, num_big_files
-        )  # There aren't enough big session files to choose from to avoid replacement/duplication
-        medium_files_choice = rng.choice(
-            medium_session_files, num_medium_files
-        )  # Same with medium sessions
-        other_files_choice = rng.choice(
-            big_session_files + medium_session_files + small_session_files,
-            num_other_files,
-            replace=False,
-        )
-        big_session_files_choice = np.concatenate(
-            (big_files_choice, medium_files_choice, other_files_choice)
-        )
-
-        max_duration_big = get_max_duration.remote(big_session_files_choice)
-        big_instance_file = f"instances/instances-big/instance-big-{i}.csv"
-
-        big_instance_task = generate_instance.remote(
-            f"big-{i}",
-            big_instance_max_parallel_sessions_max,
-            max_duration_big,
-            big_session_files_choice,
-            big_instance_file,
-            session_insertion_method="PROPORTIONAL"
-        )
-
-        validate_tasks.append(
-            validate_instance.remote(big_instance_file)
-        )
-
-    ray.get(validate_tasks)
     print("Instances generated")
 else:
     print("Skipping instance generation")
