@@ -4,6 +4,9 @@ instances/*
 instance_generation/__pycache__/*
 simulated/*
 *.log
+!/alt_exp_results/*.log
 *.pkl
 irace_results/*
 old_irace_results/*
+alt_exp_results_bak
+*.tex
