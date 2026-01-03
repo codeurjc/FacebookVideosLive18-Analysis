@@ -10,3 +10,4 @@ plotly
 dash
 rpy2
 statsmodels
+scikit-learn
