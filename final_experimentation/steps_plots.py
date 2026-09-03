@@ -187,13 +187,18 @@ def figure_servers_combined(data, size, capacity, instance, out, suffix=""):
     ax2.set_ylabel("# Viewers")
 
     handles = ax.get_lines() + ax2.get_lines()
-    ax.legend(handles, [h.get_label() for h in handles], ncol=2, frameon=False,
+    # Framed, as the manuscript's figure has it: the legend sits above the axes on white,
+    # and without a frame the entries read as floating text rather than a key.
+    ax.legend(handles, [h.get_label() for h in handles], ncol=2, frameon=True,
               loc="lower center", bbox_to_anchor=(0.5, 1.0),
-              columnspacing=0.9, handlelength=1.6)
-    fig.tight_layout(pad=0.3)
+              columnspacing=0.9, handlelength=1.6,
+              borderpad=0.4, edgecolor="0.7", framealpha=1.0)
+    # No padding anywhere: the figure is placed at a fixed \textwidth fraction in a
+    # two-column layout, so any whitespace the PNG carries is whitespace the page loses.
+    fig.tight_layout(pad=0)
     p = f"{out}/plots/servers_in_use_{size}_{capacity}{suffix}.png"
     os.makedirs(os.path.dirname(p), exist_ok=True)
-    fig.savefig(p, dpi=DPI, bbox_inches="tight")
+    fig.savefig(p, dpi=DPI, bbox_inches="tight", pad_inches=0)
     plt.close(fig)
     print(f"  wrote {p}")
 
