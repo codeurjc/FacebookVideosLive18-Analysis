@@ -52,72 +52,19 @@ ALG_COMPARE = r"""\begin{table}
 \end{table}
 """
 
-WINNERS_GLOBAL_HEAD = r"""\begin{table}
-    \caption{Mean RPD and mean rank of the two best-performing elite configurations, compared against each other over all test instances, by instance size and by server capacity.}
+WINNERS_GLOBAL_HEAD = r"""\begin{table*}[ht!]
+    \caption{Mean RPD and mean rank of the two best-performing elite configurations, compared against each other over all test instances.}
     \label{tab:winners_global}
     \begin{center}
-    {%
-    \setlength{\tabcolsep}{3pt}%
     \begin{tabular}{|c|c|c|c|c|c|c|c|c|c|}
         \hline
-        \makecell{\textbf{ID}} & \makecell{\textbf{Stat.}} & \makecell{\textbf{All}} & \makecell{\textbf{Small}} & \makecell{\textbf{Medium}} & \makecell{\textbf{Big}} & \makecell{$C$=50} & \makecell{$C$=150} & \makecell{$C$=650} & \makecell{$C$=1000} \\
+        \makecell{\textbf{ID}} & \makecell{\textbf{Stats}} & \makecell{\textbf{All}} & \makecell{\textbf{Small}} & \makecell{\textbf{Medium}} & \makecell{\textbf{Big}} & \makecell{\textbf{C=50}} & \makecell{\textbf{C=150}} & \makecell{\textbf{C=650}} & \makecell{\textbf{C=1000}}\\
         \hline"""
 
-WINNERS_GLOBAL_FOOT = r"""        \hline
-    \end{tabular}%
-    }%
+WINNERS_GLOBAL_FOOT = r"""    \end{tabular}
     \end{center}
-\end{table}
+\end{table*}
 """
-
-
-MAX_SERVERS = r"""\begin{table}[ht!]
-    \caption{Max simultaneous servers needed for a sample instance (instance 30 for each instance size). Cases where \alga could not create more servers are marked as "Error".}
-    \label{tab:max_simultaneous_servers}
-    \begin{tabular}{|c|ccc|ccc|ccc|ccc|}
-    \hline
-    & \multicolumn{12}{c|}{\textbf{Server capacity}} \\
-    \cline{2-13}
-    	\textbf{Instance size} & \multicolumn{3}{c|}{\textbf{50}} & \multicolumn{3}{c|}{\textbf{150}} & \multicolumn{3}{c|}{\textbf{650}} & \multicolumn{3}{c|}{\textbf{1000}} \\
-        \cline{2-13}
-        & \textbf{A} & \textbf{B} & \textbf{C} & \textbf{A} & \textbf{B} & \textbf{C} & \textbf{A} & \textbf{B} & \textbf{C} & \textbf{A} & \textbf{B} & \textbf{C} \\
-    \hline
-@@ROWS@@    \hline
-    \end{tabular}
-\end{table}
-"""
-
-
-def max_servers(summaries, winners_path, stats_csv, out, instance=30):
-    """Peak concurrent media servers for the winning configuration of each strategy.
-
-    Reads the STEPS_FULL summaries rather than the evaluation logs, because peak
-    concurrency is a per-step quantity the `--irace` path never records.  An infeasible
-    run still leaves a truncated CSV, so the evaluation log is what decides which cells
-    read "Error" -- the same rule depth_analysis.py applies.
-    """
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from depth_analysis import load_summaries, drop_infeasible
-
-    df = drop_infeasible(load_summaries(summaries), stats_csv)
-    winners = json.load(open(winners_path))
-    df = df[df.apply(lambda r: winners.get(r["algorithm"]) == r["config"], axis=1)]
-    df = df[df.instance == instance]
-
-    rows = ""
-    for size in SIZES:
-        cells = []
-        for cap in CAPACITIES:
-            for alg in ("A", "B", "C"):
-                sel = df[(df.instance_type == size) & (df.capacity == cap)
-                         & (df.algorithm == alg)]
-                cells.append("Error" if sel.empty else str(int(sel.max_servers.iloc[0])))
-        rows += "    " + " & ".join([size] + cells) + r" \\" + "\n"
-    path = os.path.join(out, "max_simultaneous_servers.tex")
-    with open(path, "w") as fh:
-        fh.write(MAX_SERVERS.replace("@@ROWS@@", rows))
-    print(f"wrote {path}")
-    return rows
 
 
 def numeric(series):
@@ -172,19 +119,38 @@ def winners_global(tables, out, ids):
     slices += [(s, head[head["Instance type"] == s]) for s in SIZES]
     slices += [(c_, head[head["Server capacity"] == c_]) for c_ in CAPACITIES]
 
+    # Two rows per configuration, RPD stacked over its standard deviation, the ID spanning
+    # both with \multirow, and the whole thing as a full-width table*.  Written flat it
+    # overruns the right margin: ten columns of "0.393 (0.787)" do not fit one column.
+    order = sorted(finalists, key=lambda c: ids.get(c, 0))
+    stats = {}
+    for cfg in order:
+        stats[cfg] = {}
+        for name, sub in slices:
+            sel = sub[sub.Configuration == cfg]
+            stats[cfg][name] = (sel.RPD.mean(), sel.RPD.std(), sel.Rank.mean())
+
+    # Bold the better of the two in every column, per statistic; lower is better for both.
+    best_rpd = {n: min(stats[c][n][0] for c in order) for n, _ in slices}
+    best_rank = {n: min(stats[c][n][2] for c in order) for n, _ in slices}
+
     lines = []
-    for cfg in finalists:
+    for cfg in order:
+        rpd_cells, rank_cells = [], []
+        for name, _ in slices:
+            mean, sd, rank = stats[cfg][name]
+            if mean == best_rpd[name]:
+                rpd_cells.append(f"\\makecell{{\\textbf{{{mean:.3f}}}\\\\\\textbf{{({sd:.3f})}}}}")
+            else:
+                rpd_cells.append(f"\\makecell{{{mean:.3f}\\\\ ({sd:.3f})}}")
+            rank_cells.append(f"\\textbf{{{rank:.3f}}}" if rank == best_rank[name]
+                              else f"{rank:.3f}")
         cid = ids.get(cfg, "?")
-        for stat in ("RPD", "Rank"):
-            cells = []
-            for _, sub in slices:
-                sel = sub[sub.Configuration == cfg]
-                if stat == "RPD":
-                    cells.append(f"{sel.RPD.mean():.3f} ({sel.RPD.std():.3f})")
-                else:
-                    cells.append(f"{sel.Rank.mean():.3f}")
-            label = r"RPD (\%) (SD)" if stat == "RPD" else "Rank"
-            lines.append("        " + " & ".join([str(cid), label] + cells) + r" \\")
+        lines.append("        " + " & ".join(
+            [f"\\multirow{{2}}{{*}}{{{cid}}}", "\\makecell{RPD (\\%)\\\\(std)}"] + rpd_cells) + " \\\\")
+        lines.append("       " + " & ".join(["", "Rank"] + rank_cells) + "\\\\")
+        lines.append("        \\hline")
+
     path = os.path.join(out, "winners_global.tex")
     with open(path, "w") as fh:
         fh.write(WINNERS_GLOBAL_HEAD + "\n" + "\n".join(lines) + "\n" + WINNERS_GLOBAL_FOOT)
