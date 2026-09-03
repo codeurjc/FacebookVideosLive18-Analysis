@@ -3,6 +3,7 @@
 Reproduction package for the paper "WebRTC media server interconnection strategies for scalable low-latency live streaming sessions". This description contains detailed steps to reproduce the results on the paper.
 
 The complete reproduction package can be found in Zenodo ([https://doi.org/10.5281/zenodo.17779884](https://doi.org/10.5281/zenodo.17779884)) and contains the following files:
+
 ```
 .
 ├── instance-generation.zip         # Scripts used to generate random instances based on FacebookVideosLive18 dataset
@@ -11,7 +12,9 @@ The complete reproduction package can be found in Zenodo ([https://doi.org/10.52
 ├── irace_results.zip               # irace results from the experiments in the paper (parameter evaluation results)
 ├── test_elite_configs.zip          # Final evaluation results
 ├── simulated.zip                   # Detailed simulation results used for plotting in the paper
-├── analysis.zip                    # Jupyter Notebooks for data analysis
+├── steps_full.zip                  # Reduced per-step data: one summary record and one decimated
+│                                   # series per run of the final evaluation grid
+├── analysis.zip                    # Analysis scripts and Jupyter Notebooks
 └── README.md                       # This file
 ```
 
@@ -24,30 +27,48 @@ This repository contains scripts and notebooks for analyzing live video data fro
 - [Instance generation](#instance-generation)
 - [Simulation](#simulation)
   - [Parameter evaluation](#parameter-evaluation)
+    - [Two machines](#two-machines)
+    - [Holding races back, and draining a machine](#holding-races-back-and-draining-a-machine)
+    - [When a race dies mid-flight](#when-a-race-dies-mid-flight)
+    - [When a race dies in post-selection](#when-a-race-dies-in-post-selection)
+    - [Picking the elite configurations for the final evaluation](#picking-the-elite-configurations-for-the-final-evaluation)
   - [Final evaluation](#final-evaluation)
-  - [Detailed data for analysis](#detailed-data-for-analysis)
+    - [When the final evaluation stalls](#when-the-final-evaluation-stalls)
+    - [The single-instance sample behind Table 6 and Figure 4](#the-single-instance-sample-behind-table-6-and-figure-4)
+  - [Reducing the per-step archives](#reducing-the-per-step-archives)
 - [Analysis](#analysis)
+  - [Final experimentation (scripted)](#final-experimentation-scripted)
+  - [Notebooks](#notebooks)
 
 ## Requirements
 
 The following software versions were used:
 
 For generating instances:
+
 - Ubuntu 22.04
 - Python 3.11
 
 For running the simulations:
-- Ubuntu 22.04
-- Docker
-- Java 21
-- Maven 3.9
+
+- Ubuntu 22.04 or newer
+- Docker (for parameter tuning)
+- Java 21 or later and Maven 3.9 (for the final evaluation)
+- `zstd`, for the per-step archives the final evaluation writes
+- GNU tar 1.32 or newer
+
+Both steps are long and want a large machine: the tuning grid is about 6,800 core-hours and
+the final evaluation writes several hundred GB of per-step archives. Sizes and timings quoted
+below were measured on a 64-core, 118 GB machine with an 800 GB data volume.
 
 For data analysis:
+
 - Windows 10 (Ubuntu 22.04 can also be used)
 - Python 3.11
 - R 4.5.0 with irace 4.2.0 package installed
 
 ## Instance generation
+
 You can generate instances using the scripts in `instance_generation.zip`, or use the already generated instances in `instances.zip`. `instance_generation.zip` contains a folder with the necessary scripts for generating new instances. The scripts rely on the FacebookVideosLive18 dataset. The dataset can be downloaded from [here](https://sites.google.com/view/facebookvideoslive18/download?authuser=0). Ensure the datasets are placed in the `data/` directory (download both datasets' full compressed files and unzip them in `data/`). The directory structure should look like this:
 
 ```
@@ -63,30 +84,320 @@ instance_generation/
 Then, install the packages needed and run the script in the `instance_generation/generate_instances.py` directory to generate instances.
 
 ```bash
-pip install -r instance_generation/requirements.txt
+pip install -r requirements.txt
 python3 instance_generation/generate_instances.py
 ```
 
-The instances will be generated in the `instances/` folder, separated by instance size. A `sessions/` folder will also be created containing the session data used for generating the instances.
+The instances will be generated in the `instances/` folder, separated by instance size (`instances/instances-<size>/instance-<size>-<n>.csv`). A `sessions/` folder will also be created containing the session data used for generating the instances.
+
+The simulation steps below read instances from a `$DATA_DIR` split into a training and a test
+set, which is what keeps either step from having to move files around. To go from the
+generator's output to that layout:
+
+```bash
+for size in small medium big; do
+    mkdir -p "$DATA_DIR/train/$size" "$DATA_DIR/test/$size"
+    for n in $(seq 0 29);  do cp "instances/instances-$size/instance-$size-$n.csv" "$DATA_DIR/train/$size/"; done
+    for n in $(seq 30 39); do cp "instances/instances-$size/instance-$size-$n.csv" "$DATA_DIR/test/$size/";  done
+done
+```
 
 ## Simulation
 
 The simulation source code is in `llls-simulator.zip`. Unzip the file.
 
 ### Parameter evaluation
-To evaluate different parameter configurations using irace, add the instances of the same instance size (newly generated or from `instances.zip`) to the `instances/` folder. The paper used instances 0 to 29 of each instance size for this step. Don't mix instance sizes in the same run.
 
-To run the irace experiments, run the following script:
+The paper tunes **36 separate irace races**: an all-strategies race for every (instance size,
+capacity) pair, plus a per-strategy race for A and for B over the same pairs.
+
+| Races                                        | `maxExperiments`                          | Count |
+| -------------------------------------------- | ----------------------------------------- | ----- |
+| all strategies (A, B and C sampled together) | small 75,000 · medium 35,000 · big 20,000 | 12    |
+| Strategy A only                              | 1,000                                     | 12    |
+| Strategy B only                              | 5,000                                     | 12    |
+
+Each race needs its own scenario (the budget depends on the instance size), its own parameter
+file (`maxReservation` ranges over `[1, C/2]` — so 25, 75, 325, 500 — and the per-strategy
+races expose only that strategy's parameters) and its own target-runner (the capacity is baked
+into it, not passed as an argument). Only the training instances of one size may be visible to
+a race, and only the test instances of that same size.
+
+`run-tuning.sh` does all of that. It generates the three files per race from the templates in
+`tuning/templates/` and _mounts_ the right instance directory, so no file on disk is edited or
+moved between races:
 
 ```bash
-./run-docker.sh
+./run-tuning.sh              # the whole 36-race grid
+./run-tuning.sh --list       # print the planned grid with cost estimates, then exit
+./run-tuning.sh --status     # progress of a grid already in flight
+./tuning-status.sh           # the same, consolidated across every machine on the grid
+./tuning-status.sh --watch   # ...refreshed every 60s
+./tuning-hold.sh --show      # which races are held out of the grid
+./recover-race.sh --check all/big/50   # is that race's irace.Rdata a result or a wreck?
 ```
 
-This will run the irace experiments as described in the paper. This process has to be done for each instance size you want results from. The results will be stored in the `tuning/` directory, where the results will be stored in each subdirectory as `irace.Rdata` files. Warning: `irace.Rdata` files can be overwritten if the script is run multiple times, so make sure to back them up.
+`tuning-status.sh` is a separate, read-only script precisely so that it can be added or
+edited while a grid is running — which `run-tuning.sh` cannot be. It reports each race as
+done / RUNNING / CRASHED / held / claimed / pending, says which machine is running what and how much of its
+budget is left, and projects the finish from the work remaining and the number of slots
+across all machines (`TOTAL_SLOTS`) rather than from the observed completion rate, which is
+meaningless until several races have finished. A race that has been running long enough to
+have timings of its own is weighed by those rather than by the estimate, and the projection is
+reported as a floor, because every race timed so far has run slower than estimated.
 
-Note: The process may take several hours to days depending on the instance size and computational resources. To improve running times, consider changing the `parallel` value in the `scenario.txt` files in each subdirectory of `tuning/` to the number of available CPU cores.
+Instances are read from `$DATA_DIR`, which must be laid out per size — the training set
+(instances 0–29) and the test set (30–39) kept apart:
+
+```
+$DATA_DIR/
+├── train/{small,medium,big}/instance-<size>-{0..29}.csv
+└── test/{small,medium,big}/instance-<size>-{30..39}.csv
+```
+
+Everything else comes from the environment; the script itself is never edited:
+
+| Variable                             | Default                         | Meaning                                                           |
+| ------------------------------------ | ------------------------------- | ----------------------------------------------------------------- |
+| `DATA_DIR`                           | `/mnt/instances/data`           | instances, laid out as above                                      |
+| `RESULTS_DIR`                        | `/mnt/instances/tuning-results` | where finished races are filed                                    |
+| `WORK_DIR`                           | `/mnt/instances/tuning-work`    | generated race directories (removed on success)                   |
+| `PARALLEL`                           | `nproc`                         | irace's `parallel`, i.e. concurrent target-runner calls           |
+| `PARALLEL_BIG`                       | `$PARALLEL`                     | same, for big instances only — they are the memory-hungry ones    |
+| `KINDS`                              | `all A B`                       | which race kinds to run                                           |
+| `SIZES`                              | `small medium big`              | which instance sizes                                              |
+| `CAPACITIES`                         | `50 150 650 1000`               | which capacities                                                  |
+| `RACES`                              | —                               | explicit race ids (`all/big/50 B/small/150`), overriding the grid |
+| `BUILD_IMAGE`                        | `1`                             | set to `0` to skip `docker build`                                 |
+| `COORD`, `QUEUE_DIR`, `RESULTS_SYNC` | —                               | see _Two machines_, below                                         |
+
+The budgets are the paper's and are deliberately **not** configurable.
+
+Sizing the parallelism: one target-runner call is a JVM that peaks at about 1.5 GB on big
+instances, so the usable figure is whichever is smaller of the core count and RAM ÷ 2 GB. On a
+64-core, 118 GB machine `PARALLEL=62` is comfortable; on a 32-core, 59 GB machine use about 30.
+
+Each finished race is filed in the layout the analysis expects, together with the exact
+scenario, parameter file and target-runner it ran under, so the race stays reconstructible:
+
+```
+$RESULTS_DIR/
+├── 75000_maxExp/small/{50,150,650,1000}/     # all-strategies races
+├── 35000_maxExp/medium/…
+├── 20000_maxExp/big/…
+└── per_algorithm/{A,B}/<size>/<C>/
+        ├── irace.Rdata      # what the analysis reads
+        ├── irace.log        # irace's own output
+        ├── scenario.txt, parameters.txt, target-runner
+        └── race.json        # budget, parallelism, wall time, host
+```
+
+A race that already holds an `irace.Rdata` is skipped, so an interrupted grid resumes by
+re-running the same command.
+
+**Do not disable elite testing.** `testIterationElites` and `testNbElites = 5` in the scenario
+template look like a tuning-time luxury, but `irace.ipynb` reads
+`iraceResults$testing$experiments` and cannot compute mean RPD or rank without it.
+
+#### Two machines
+
+Races are claimed one at a time through an atomic `mkdir` in `$QUEUE_DIR` on a coordinator, so
+two machines can share one grid and whichever is free takes the next race. This matters because
+the races are wildly uneven — the largest is estimated at ~1,900 core-hours and the smallest at
+0.6 — so a fixed split wastes a lot. Races are handed out longest-first for the same reason.
+
+Start the coordinator normally, then on the second machine point `COORD` at it:
+
+```bash
+# coordinator (owns the queue)
+PARALLEL=62 ./run-tuning.sh
+
+# joining machine
+COORD=ubuntu@10.0.0.1 PARALLEL=30 \
+  DATA_DIR=$HOME/data WORK_DIR=$HOME/tuning-work RESULTS_DIR=$HOME/tuning-results \
+  ./run-tuning.sh
+```
+
+The joining machine rsyncs each finished race back to the coordinator (`RESULTS_SYNC`, which
+defaults to the coordinator's `RESULTS_DIR`), so results collect in one place and `--status` on
+the coordinator sees the whole grid.
+
+#### Holding races back, and draining a machine
+
+Both of these come up mid-grid, and neither may disturb a race in flight — a big race can
+represent days of compute.
+
+_Keeping races out of the grid._ A claim that already exists reads to a worker as "another
+machine has this race", so creating one by hand reserves a race for nobody and workers move
+on to the next. `tuning-hold.sh` does that in bulk, marking each hold with a `HOLD` file so
+releasing one can never remove the claim of a race that actually ran:
+
+```bash
+./tuning-hold.sh --hold A B      # run only the all-strategies races
+./tuning-hold.sh --release A B   # give them back
+```
+
+Only the twelve all-strategies races feed the paper; the A and B races exist for the
+per-strategy comparison. Holding A and B cuts the grid by two thirds of its races.
+
+_Taking a machine out of the grid._ A worker claims its next race by running `mkdir` over ssh
+on the coordinator, so making that ssh fail makes every claim fail — and a failed claim is
+exactly what the worker reads as "someone else has it". It finishes the race it is inside of,
+writes the result to its own disk, skips the rest of its list and exits. Add to the worker's
+`~/.ssh/config`:
+
+```
+Host <coordinator-ip>
+    ProxyCommand /bin/false
+```
+
+Deleting those two lines and re-launching `run-tuning.sh` puts the machine back to work. The
+same gate blocks the worker's `RESULTS_SYNC` push, so its finished races stay local, with a
+`[sync] FAILED, result kept locally` line in its log. Pull them in from the coordinator, which
+needs nothing from the worker but a `race.json`:
+
+```bash
+WORKER=ubuntu@10.0.0.2 ./collect-worker-results.sh            # once
+WORKER=ubuntu@10.0.0.2 ./collect-worker-results.sh --watch    # until the worker goes idle
+```
+
+#### When a race dies mid-flight
+
+A race can crash after days of work, and the failure is quiet. irace writes its log file at the
+end of every iteration, so a run that dies leaves an `irace.Rdata` behind — but a _recovery
+checkpoint_, holding only `scenario`, `irace_version` and `state`, where a finished race holds
+`allElites`, `experiments`, `allConfigurations` and `testing`. `run-tuning.sh` files it and
+reports `[done]` whatever the exit code, and every status view then counts the race complete.
+Nothing goes wrong until the analysis tries to read the elite configurations out of it.
+
+`race.json` records the real exit code, so `tuning-status.sh` shows such a race as `CRASHED`
+rather than `done`, and prices its unfinished budget back into the work remaining:
+
+```
+all/big/50       CRASHED   exit=139, 10913 of 20000 budget left; ./recover-race.sh all/big/50
+```
+
+The checkpoint is not a loss. `--recovery-file` replays the finished iterations in seconds and
+restarts irace at the iteration that was interrupted; only the experiments in flight inside
+that iteration are repeated:
+
+```bash
+./recover-race.sh --check all/big/50    # report only: exit code, shape of the .Rdata, budget left
+./recover-race.sh all/big/50            # archive the wreck alongside, resume from it
+PARALLEL=32 ./recover-race.sh all/big/50
+```
+
+The crashed race is archived as `<race-dir>.crashed-<timestamp>` rather than deleted: it holds
+the only copy of the checkpoint and of the first log, and the recovered race is reconstructible
+only with them. On success the two logs are concatenated in the order they ran, so the race
+keeps one continuous `irace.log`. The script refuses to start while another race is running on
+the same machine — two races means twice the JVMs on the same cores and the same RAM — unless
+`CONFIRM_BUSY=1` says the double-booking is deliberate.
+
+_Queueing a recovery behind the race in flight._ `recover-race.sh` will not start while
+another race is up, and the machine never goes idle by itself — `run-tuning.sh` claims the
+next race the moment the current one ends. Holding the races that have not started yet makes
+that next claim fail, which the runner reads as "another machine has it": it walks the rest of
+its list, starts nothing, and exits without disturbing the race it is inside of.
+
+```bash
+./tuning-hold.sh --hold all      # the runner will stop after its current race
+setsid nohup ./recover-when-idle.sh all/big/50 \
+    >> /mnt/instances/recovery-queue.log 2>&1 < /dev/null &
+```
+
+`recover-when-idle.sh` waits for the runner _and_ every race container to be gone, recovers
+the race with the whole machine, then releases the holds and relaunches the grid — which skips
+every race that already has an `irace.Rdata`, the recovered one included. `RESUME=0` stops
+after the recovery instead. Serialising this way costs nothing overall: the core-hours are the
+same either way, and the recovered race finishes in half the wall time it would take sharing
+the machine. While the holds are in place `tuning-status.sh` counts only the unheld races, so
+its totals read against a much smaller grid until the holds come off.
+
+_Giving a drained machine one last race._ A drained worker cannot claim anything: its gate to
+the coordinator always fails. `queue-race.sh` waits for it to finish what it is doing and then
+re-launches `run-tuning.sh` with `RACES` set to a single race and no `COORD`, so it uses a
+queue on its own disk. A one-race list is walked in one pass, so the runner exits when that
+race ends and takes nothing else.
+
+```bash
+COORD= QUEUE_DIR=$HOME/tuning-queue DATA_DIR=$HOME/data RESULTS_DIR=$HOME/tuning-results \
+    setsid nohup ./queue-race.sh all/medium/50 >> ~/queue-medium50.log 2>&1 < /dev/null &
+```
+
+Because that run bypasses the shared queue, **the coordinator must already hold a claim for
+the race**, or a second machine will start it too. Create the claim directory without a `HOLD`
+marker inside it: a marked claim is a hold, which `--release` gives back, while an unmarked one
+reads as "another machine has this" to every worker and survives a release. Drop an `OWNER`
+note in it saying which machine took it — nothing parses that file, but the next person to
+read the queue will want it. The result stays on the worker; `collect-worker-results.sh` pulls
+it in, and once it lands the race is skipped on its `irace.Rdata` like any other.
+
+`queue-race.sh` checks the instance directories, the image and the queue _before_ it starts
+waiting, so a machine missing `data/train/medium` says so now rather than in two days.
+
+_Putting a machine back on the shared queue._ The mirror image of draining. A machine that
+was given a fixed race list (`RACES=...`) walks it once and stops, and a drained machine
+stops at the end of its current race; either way something has to start `run-tuning.sh`
+again, this time **with `COORD` set**, so it claims from the coordinator instead of from a
+list decided in advance. `join-when-idle.sh` waits for the machine to be free and does that:
+
+```bash
+COORD=user@coordinator-host DATA_DIR=$HOME/data \
+    WORK_DIR=$HOME/tuning-work RESULTS_DIR=$HOME/tuning-results \
+    setsid nohup ./join-when-idle.sh >> ~/join-grid.log 2>&1 < /dev/null &
+```
+
+It claims nothing itself — `run-tuning.sh` still claims one race at a time through the
+coordinator — so two machines running it never collide and neither can take a held race.
+Remember to remove the drain gate from `~/.ssh/config` first: the script checks the
+coordinator once when it starts (a warning) and again when the machine goes idle (which
+decides), precisely because the gate tends to be forgotten in between.
+
+A worker walks its race list once, in a single pass. Releasing a hold therefore does **not**
+send a worker back to a race it has already walked past; re-run `run-tuning.sh` to pick
+released races up. Finished races are skipped on their `irace.Rdata`, so re-running is safe.
+
+**Never edit `run-tuning.sh` while a grid is running.** `bash` reads a script by byte offset as
+it executes, so rewriting the file in place makes a long-running invocation resume in the middle
+of whatever now sits at that offset. Copy the edited version in once the grid has finished.
+
+**Cost.** `--list` prices the grid at roughly 6,800 core-hours, ~78% of it in the twelve
+big-instance races. **That is a floor and a loose one.** The per-run times it multiplies were
+measured on Strategy C's _elite_ configuration, and irace spends most of its budget on
+configurations that are nothing like the elite one: measured against the estimate. Budget four
+to five times the printed figure for the big races. Two further reasons the wall time overruns:
+irace cannot always fill every parallel slot — in the later iterations of a race the surviving
+configurations can number well below `parallel` — and a race with few possible configurations
+(Strategy A has four) finishes well short of the nominal speed-up.
+
+`tuning-status.sh` reports the observed per-run time of every race that has one, which is the
+number to plan by once a race is under way.
 
 The results of this step for the paper are collected in the `irace_results.zip` file.
+
+#### Picking the elite configurations for the final evaluation
+
+The final evaluation runs the configurations irace chose: for each race the **first**
+configuration of its elite set, since irace lists them best-first. Two scripts do this,
+reading the `irace.Rdata` files directly, so the elite sets never have to be transcribed:
+
+```bash
+python3 final_experimentation/elite_configs.py --results irace_results --out tables
+python3 final_experimentation/elites_to_param_file.py \
+    --elites tables/best_elites.json \
+    --out ../llls-simulator/run-alg-parameters.txt.algc
+```
+
+`elite_configs.py` summarises every race and writes `best_elites.json`, the winner of each
+of the twelve `all` races. `elites_to_param_file.py` turns that into the simulator's
+`<label>;<CLI args>` parameter file, deduplicating configurations that win more than one
+race, and writing `--seed 12345` on every line — a configuration without a seed draws
+`System.nanoTime()` and cannot be reproduced. It rebuilds each label from the arguments it
+emits and refuses to write a file where the two disagree.
+
+The A and B parameter files (`run-alg-parameters.txt.alg{a,b}`) are built the same way from
+the per-algorithm races, passing `--out` the matching path.
 
 ### Final evaluation
 
@@ -96,58 +407,265 @@ First, you will need to compile the simulator using Maven:
 mvn clean package
 ```
 
-To run the final evaluation using the best configurations found in the parameter evaluation step, add the test instances of a single instance size (instances 30 to 39) to the `instances/instances-<size>/` folder, where \<size\> is the size of the instances, "small", "medium" or "big" (remember to remove training instances if present).
-
-For each instance size and algorithm, the script `run-alg-on-all.sh` will need to be run. Before running the script, make sure to edit the variable `INSTANCE_TYPE` in the script to the desired instance size ("small", "medium" or "big").
-
-For each algorithm there is a parameters file next to the script called `run-alg-parameters.txt.algx` where `x` is the algorithm letter (a, b or c). Edit the variable `PARAM_FILE` in the script to point to the desired algorithm parameters file (the `.algc` file can be also understood as all algorithms, as C always wins).
-
-Then, run the script:
+Point `INSTANCE_DIR` at the test instances (30 to 39) — either the per-size layout the
+tuning step already uses (`$DATA_DIR/test/<size>/`) or a single flat directory holding every
+size, both of which the script accepts — then run the whole final evaluation with one command
+per strategy. The configurations come from the elite sets chosen in the previous step:
 
 ```bash
-./run-alg-on-all.sh > name.log
+export INSTANCE_DIR=/mnt/instances/data/test
+PARAM_FILE=$PWD/run-alg-parameters.txt.alga ./run-alg-full-on-all.sh > a_full.out 2> a_progress.log
+PARAM_FILE=$PWD/run-alg-parameters.txt.algb ./run-alg-full-on-all.sh > b_full.out 2> b_progress.log
+PARAM_FILE=$PWD/run-alg-parameters.txt.algc ./run-alg-full-on-all.sh > c_full.out 2> c_progress.log
 ```
 
-Where `name.log` is the desired name for the log file. For later analysis, it is recommended to name the log files with the following names for each algorithm:
+`run-alg-full-on-all.sh` sweeps **every**
+configuration in `PARAM_FILE` over all three instance sizes, all four capacities and test
+instances 30-39, runs them in `STEPS_FULL` mode so each run also emits its per-step CSV,
+and writes into `$RESULTS_DIR` (default `/mnt/instances/llls-results`):
 
 ```
 .
-├── a_big.log      # Algorithm A on big instances
-├── a_medium.log   # Algorithm A on medium instances
-├── a_small.log    # Algorithm A on small instances
-├── b_big.log      # Algorithm B on big instances
-├── b_medium.log   # Algorithm B on medium instances
-├── b_small.log    # Algorithm B on small instances
-├── c_big.log      # All algorithms (C) on big instances
-├── c_medium.log   # All algorithms (C) on medium instances
-└── c_small.log    # All algorithms (C) on small instances
+├── small.log / medium.log / big.log      # Strategy C (all elites), the format the analysis reads
+├── a_small.log / a_medium.log / …        # Strategy A, same format
+├── b_small.log / b_medium.log / …        # Strategy B
+├── small.tar / medium.tar / big.tar      # per-step CSVs, one zstd member per run
+└── a_small.tar / b_big.tar / …           # likewise, prefixed per strategy
 ```
+
+Each `.tar` archive holds one
+`<run>.csv.zst` plus its `<run>.results.json`. No uncompressed CSV ever outlives its own
+job, which is what makes the full grid feasible — unpacked it would be about 2.2 TB.
+
+The grid is driven entirely from the environment, so the script never has to be edited:
+
+| Variable                            | Default                       | Meaning                                                         |
+| ----------------------------------- | ----------------------------- | --------------------------------------------------------------- |
+| `PARAM_FILE`                        | `run-alg-parameters.txt.algc` | configurations to run; also sets the `a_`/`b_` output prefix    |
+| `INSTANCE_TYPES`                    | `small medium big`            | instance sizes                                                  |
+| `CAPACITIES`                        | `50 150 650 1000`             | media server capacities                                         |
+| `INSTANCE_DIR`                      | `test-instances`              | instance CSVs, flat or one directory per size                   |
+| `INSTANCE_IDS`                      | `30..39`                      | which test instances; a single id re-runs one sample instance   |
+| `RESULTS_DIR`                       | `/mnt/instances/llls-results` | archives and logs                                               |
+| `SCRATCH_DIR`                       | `/mnt/instances/llls-scratch` | per-job working directories                                     |
+| `ZSTD_LEVEL`                        | `9`                           | archive compression level                                       |
+| `MAX_JOBS_SMALL`, `MAX_JOBS_MEDIUM` | `63`                          | concurrent jobs; lower them on a smaller machine                |
+| `MAX_JOBS_BIG`                      | `32`                          | same for big instances, which hold multi-GB CSVs while they run |
+
+Progress goes to stderr with an ETA weighted by instance size; the ordered per-run output
+goes to stdout. As with the tuning grid, **do not edit the script while it is running** — bash
+reads it by byte offset as it executes.
+
+**Plan for the disk.** The Strategy C grid alone is 457 GB of archives (small 3.7 GB,
+medium 67 GB, big 386 GB); A adds about 15 GB (it is infeasible at low capacity, so many
+runs produce no CSV at all) and B about 374 GB. The script pauses launching new jobs
+whenever free space falls below `MIN_FREE_GB` (120 GB by default), because a big run holds
+a multi-GB uncompressed CSV until it finishes and up to 32 of them run at once.
+
+**Every configuration must carry `--seed`.** A strategy defaults its seed to
+`System.nanoTime()` when the flag is absent, so a parameter file without `--seed` gives every
+one of its runs a different random seed: the results are not reproducible, and configurations
+are no longer compared on equal footing. All three `run-alg-parameters.txt.alg{a,b,c}` files
+now end each line with `--seed 12345`; keep that when adding configurations. The seed appears
+in the output filename, which is the quickest way to check a run actually used it.
+
+**`java` must be on `PATH`.** The script shells out to `java` directly, so a non-interactive
+launch (`ssh host './run-alg-full-on-all.sh'`) that does not source the login profile will
+fail every job instantly with `java: command not found`. Pass it explicitly, e.g.
+`PATH=$JAVA_HOME/bin:$PATH ./run-alg-full-on-all.sh`.
 
 The results of this step for the paper are collected in the `test_elite_configs.zip` file.
 
-### Detailed data for analysis
+#### When the final evaluation stalls
 
-In order to obtain the plots shown in the paper (and more), for any simulation run that you need detailed data for analysis you will need to use the `run-alg-full.sh` script. This script works similarly to `run-alg-on-all.sh`, but it will generate detailed output files for each simulation run in the `results/` folder. The output files will be CSV files with the data for each step of the simulation. Note that the script will only run the algorithms and configurations in the `PARAM_FILE` variable for a single instance (number identified in the variable `INSTANCE_ID`), so you will need to run the script multiple times for each instance you want detailed data for. For the paper, instance 30 from small instances was used.
+Every finished job appends its members to one tar per instance size, serialised by a
+`flock`. On GNU tar 1.32 and newer that append seeks to the end and costs nothing. On older
+tar it **reads the entire archive first**, so each append costs a full scan and the grid
+becomes quadratic in the number of runs. `run-alg-full-on-all.sh` warns at startup when it
+finds tar older than 1.32.
 
-The results of this step for the paper are collected in the `simulated.zip` file.
+The stall is worse than slow, because it also stops the grid from finishing: with every job
+slot parked on the lock, `wait_for_slot` never returns, so the main loop stops launching.
+In our run **the last 17 of 960 jobs were never started at all** — they are simply absent,
+not failed, and nothing in the logs says so. Compare the run count in each `.log` against
+`configurations × sizes × capacities × instances` before trusting a grid that stalled.
+
+**Do not kill the queued jobs to unstick it.** `run_one` runs `rm -rf "$jobdir"` after the
+tar call _regardless of its exit status_, so killing the `flock` waiters deletes those runs'
+per-step CSVs. Recover in this order:
+
+```bash
+# 1. copy the pending results somewhere safe FIRST
+mkdir -p ~/llls-rescue/jobs
+for d in "$SCRATCH_DIR"/job.*; do [ -d "$d/results" ] && cp -a "$d/results" ~/llls-rescue/jobs/$(basename $d); done
+
+# 2. stop the driver, then the waiters that are not holding the lock; let the
+#    in-flight tar finish on its own so the archive is not left truncated
+pkill -f 'run-alg-full-on-al[l].sh'
+for pid in $(pgrep -f "flock $SCRATCH_DIR"); do pgrep -P "$pid" >/dev/null || kill "$pid"; done
+
+# 3. run the jobs that never launched (JOBS entries are <grid index>:<size>:<capacity>:<instance>)
+INSTANCE_DIR=$INSTANCE_DIR PARAM_FILE=$PWD/run-alg-parameters.txt.algc \
+  CONFIG_LINE=12 OUT_DIR=~/llls-resume \
+  JOBS="943:medium:650:33 944:medium:650:34 ..." ./run-alg-full-resume.sh
+
+# 4. append everything in ONE tar call -- one scan instead of one per member
+tar -rf "$RESULTS_DIR/medium.tar" -C ~/llls-append $(ls ~/llls-append)
+```
+
+Step 4 is the whole point: 47 members appended one at a time cost about an hour, and 2 m 25 s
+in a single call.
+
+`run-alg-full-resume.sh` re-runs a named subset of the grid exactly as the driver would, and
+writes each job's legacy log entry as `legacy-<grid index>.txt` so the per-size `.log` can be
+reassembled in grid order. The grid index is
+`config × sizes × capacities × instances`, in the order the driver iterates them: for each
+configuration, each instance size, each capacity, then instances 30-39.
+
+Two things to check afterwards:
+
+- **Append members by bare name.** `tar -rf archive -C dir sub/file` stores the member as
+  `sub/file`, and `reduce_archive.py` parses the run's identity out of the member name and
+  cannot read that. Stage the files flat (hard links are enough) and pass bare basenames.
+- **Count the members.** `tar -tf medium.tar | grep -c csv.zst` must equal the number of runs,
+  and `sort -u` on that list must give the same number — a duplicate is silently double-counted
+  by the reduction.
+
+#### The single-instance sample behind Table 6 and Figure 4
+
+The paper's peak-concurrency table and its servers-in-use figure are drawn from **instance
+30 only**, for the winning configuration of each of the three strategies. The Strategy C
+runs already exist in the full grid above; the A and B ones are a small extra sweep, which
+is why the simulator carries winner-only parameter files:
+
+```bash
+cd ../llls-simulator
+for alg in a b; do
+  INSTANCE_DIR=<test instances> \
+  PARAM_FILE=$PWD/run-alg-parameters.winner.txt.alg$alg \
+  INSTANCE_TYPES="small medium big" INSTANCE_IDS=30 \
+  RESULTS_DIR=<results dir> ./run-alg-full-on-all.sh
+done
+```
+
+That is 12 runs per strategy and a few minutes. Reduce the resulting `a_*.tar` / `b_*.tar`
+alongside the C archives, as below, and `depth_analysis.py` and `steps_plots.py` pick all
+three strategies up automatically.
+
+### Reducing the per-step archives
+
+The archives are too large to unpack, so the analysis never does. `reduce_archives.sh`
+streams each run's CSV out of its tar by byte offset, decompresses it on the fly, takes its
+statistics in a single pass and discards it:
+
+```bash
+./final_experimentation/reduce_archives.sh /mnt/instances/llls-results steps_full \
+    small medium big a_small a_medium a_big b_small b_medium b_big
+```
+
+`NSHARDS` (default 48) parallel workers each hold one decompression pipe, so set it to
+roughly the core count. This turns 457 GB into about 800 MB:
+
+```
+steps_full/
+├── index/<archive>.jsonl        # member -> byte offset, so a run can be read without rescanning
+├── summary/<archive>.jsonl      # one record per run (see below)
+└── series/<archive>/*.csv.gz    # one decimated per-step series per run
+```
+
+Each **summary** record carries the run's identity (instance size, capacity, instance,
+strategy, and the configuration label that joins it to the evaluation logs) and, computed
+exactly over every row of the CSV:
+
+- `objective`, `max_servers`, `servers_created`, `max_sessions`, `max_viewers`;
+- `max_tree_depth`, `max_avg_tree_depth` — the deepest session tree reached;
+- `tw_mean_*`, `vw_mean_*` — depth averaged over the time each depth is held, and over
+  viewer-seconds, so a one-second spike does not read like a steady state;
+- `depth_time_hist`, `avg_depth_time_hist` — seconds held at each depth, which give exact
+  time-weighted percentiles rather than sampled ones.
+
+Each **series** file is the per-step CSV decimated by row index — the same sampling
+`simulated.ipynb` did with `sample_rate=100`, but with the stride chosen per run so every
+series lands at 20k-40k rows regardless of instance size.
 
 ## Analysis
-The analysis notebooks are in `analysis.zip`. Unzip the file and install the required Python packages with:
+
+Install the required Python packages with:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-The following notebooks are available for analysis:
+### Final experimentation (scripted)
 
-- irace.ipynb: Analysis of the parameter evaluation step and the final evaluation. It expects the data in the following structure:
+The final-evaluation tables, the tree-depth analysis and the per-step figures are produced
+by three scripts in `final_experimentation/`, which run from a shell and need neither R nor
+Jupyter. Run them in this order — the second and third read the winners the first picks:
+
+```bash
+python3 final_experimentation/final_evaluation.py --logs test_elite_configs --out tables
+python3 final_experimentation/depth_analysis.py   --summaries steps_full/summary --out tables
+python3 final_experimentation/steps_plots.py      --series steps_full/series --out tables
+```
+
+| Script                | Reads                                                | Writes                                                                                                                                                       |
+| --------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `final_evaluation.py` | `test_elite_configs/*.log`                           | `alt_results*.tex`, `winners_global.tex`, `alg_comparison_*.tex`, `costs_all.tex`, `best_elite_runs.csv`, `winners.json`                                     |
+| `depth_analysis.py`   | `steps_full/summary/*.jsonl`, `best_elite_runs.csv`  | `max_simultaneous_servers.tex`, `tree_depth_by_strategy.tex`, `tree_depth_weighted.tex`, `depth_vs_cost.tex`, `depth_cost_tradeoff.tex`, `plots/depth_*.png` |
+| `steps_plots.py`      | `steps_full/series/**`, `steps_full/summary/*.jsonl` | `plots/servers_in_use_*.png`, `plots/depth_over_time_*.png`                                                                                                  |
+
+Four more scripts sit either side of that step. The first two run _before_ the final
+evaluation and are described under
+[Picking the elite configurations](#picking-the-elite-configurations-for-the-final-evaluation);
+the last two run after it and write the manuscript's own hand-formatted tables, so they are
+the only ones that write outside this repository:
+
+| Script                    | Reads                                                                                       | Writes                                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `elite_configs.py`        | `irace_results/**/irace.Rdata`                                                              | `tables/elite_configs.csv`, `tables/best_elites.json`                                             |
+| `elites_to_param_file.py` | `tables/best_elites.json`                                                                   | `run-alg-parameters.txt.alg*` in the simulator                                                    |
+| `best_elites_table.py`    | `tables/best_elites.json`, `tables/best_elite_runs.csv`                                     | the manuscript's `tables/best_elites.tex`                                                         |
+| `paper_eval_tables.py`    | `tables/winner_costs_per_instance.csv`, `tables/best_elite_runs.csv`, `steps_full/summary/` | the manuscript's `alg_compare_instance.tex`, `winners_global.tex`, `max_simultaneous_servers.tex` |
+
+```bash
+python3 final_experimentation/best_elites_table.py \
+    --out ../webrtc-scalability-strategies/tables/best_elites.tex
+python3 final_experimentation/paper_eval_tables.py \
+    --out ../webrtc-scalability-strategies/tables
+```
+
+Both rebuild each configuration label from the values they emit and fail rather than write a
+table whose label and parameters disagree, which is the failure a hand-transcribed table
+cannot detect.
+
+`final_evaluation.py` recomputes the winner of each strategy as the one with the lowest mean RPD. Rank and RPD are
+defined as rank of the cost within each (instance size, capacity, instance)
+group, and `100 * |cost - best| / best` within the same group, both then averaged across
+groups. Infeasible Strategy A runs are excluded from the means and counted separately.
+
+**Infeasible runs still leave a CSV.** A strategy that cannot serve every viewer exits
+mid-simulation, by which point `StepSaver` has flushed whole buffers — so the archive holds a
+CSV truncated at a multiple of `buffer.size` (10,000 rows). Reduced naively those look like
+short, shallow runs and drag every average down, so `depth_analysis.py` and `steps_plots.py`
+read `best_elite_runs.csv` and drop every run the evaluation log reports as an error. That is
+why they must be run after `final_evaluation.py`.
+
+### Notebooks
+
+The notebooks are for exploratory analysis:
+
+- `irace.ipynb`: analysis of the parameter evaluation step (and the original notebook
+  version of the final evaluation). It needs R 4.5 with irace 4.2.0 through `rpy2`, and
+  expects:
+
 ```
 .
-├── irace_results/              # Folder containing the irace results from parameter evaluation step (download and check irace_results.zip for the expected structure)
-└── test_elite_configs/         # Folder containing the final evaluation results (download and check test_elite_configs.zip for the expected structure)
+├── irace_results/              # irace results from the parameter evaluation step
+└── test_elite_configs/         # final evaluation logs
 ```
-- simulated.ipynb: Analysis of the detailed simulation results. It expects the data in the following structure:
-```
-.
-└── simulated/                  # Folder containing the detailed simulation results (download and check simulated.zip for the expected structure)
-```
+
+- `simulated.ipynb`: analysis of full-resolution `STEPS_FULL` CSVs in
+  `simulated/`. Superseded by `steps_plots.py` for the paper's figures, but still the way to
+  look at a single run at full resolution.
+- `instances.ipynb`, `sessions.ipynb`: per-instance and per-session statistics of the
+  generated dataset.
