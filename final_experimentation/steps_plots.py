@@ -40,9 +40,12 @@ CAPACITIES = [50, 150, 650, 1000]
 STRATEGY_COLOR = {"A": "#0072B2", "B": "#D55E00", "C": "#009E73"}
 
 FIG_W, DPI = 3.35, 400
+# Sized for a figure placed at about one column width. The PNG is scaled to a fixed
+# fraction of \textwidth, so what matters is point size relative to FIG_W, not the pixel
+# dimensions: raising these makes the labels bigger on the printed page.
 plt.rcParams.update({
-    "font.size": 6, "axes.labelsize": 6, "axes.titlesize": 6.5,
-    "xtick.labelsize": 5.5, "ytick.labelsize": 5.5, "legend.fontsize": 5.5,
+    "font.size": 7.5, "axes.labelsize": 7.5, "axes.titlesize": 8,
+    "xtick.labelsize": 7, "ytick.labelsize": 7, "legend.fontsize": 7,
     "lines.linewidth": 0.9, "figure.dpi": DPI,
 })
 
