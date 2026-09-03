@@ -188,6 +188,18 @@ def figure_servers_combined(data, size, capacity, instance, out, suffix=""):
     ax2.plot(ref["timestamp"] / 3600.0, ref["viewers"], color=VIEWERS_COLOR,
              linestyle="--", label="# Viewers")
     ax2.set_ylabel("# Viewers")
+    # Big and medium instances run to six figures, and "140000" repeated down the right
+    # margin costs more width than the curve does. Scientific notation moves the exponent
+    # into a single offset label and gives that width back to the plot. Small instances
+    # peak in the thousands, where plain numbers are both shorter and easier to read.
+    if float(ref["viewers"].max()) >= 1e4:
+        fmt = matplotlib.ticker.ScalarFormatter(useMathText=True)
+        fmt.set_scientific(True)
+        fmt.set_powerlimits((0, 0))
+        ax2.yaxis.set_major_formatter(fmt)
+        # The default locator gives only two ticks once the labels are this short, which
+        # is too coarse to read the demand curve against.
+        ax2.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(nbins=5))
 
     handles = ax.get_lines() + ax2.get_lines()
     # Framed, as the manuscript's figure has it: the legend sits above the axes on white,
@@ -195,7 +207,8 @@ def figure_servers_combined(data, size, capacity, instance, out, suffix=""):
     ax.legend(handles, [h.get_label() for h in handles], ncol=2, frameon=True,
               loc="lower center", bbox_to_anchor=(0.5, 1.0),
               columnspacing=0.9, handlelength=1.6,
-              borderpad=0.4, edgecolor="0.7", framealpha=1.0)
+              borderpad=0.3, borderaxespad=0.1, labelspacing=0.3,
+              edgecolor="0.7", framealpha=1.0)
     # No padding anywhere: the figure is placed at a fixed \textwidth fraction in a
     # two-column layout, so any whitespace the PNG carries is whitespace the page loses.
     fig.tight_layout(pad=0)
