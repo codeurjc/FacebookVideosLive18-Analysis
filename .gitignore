@@ -1,12 +1,45 @@
+# Everything here is either an input fetched from Zenodo, an output the scripts and
+# notebooks regenerate, or local scratch. The repository tracks only source: the notebooks,
+# instance_generation/, final_experimentation/, scripts/, requirements.txt and the README.
+
+# --- inputs, fetched from Zenodo or regenerated (see the README) ----------------------
 data/*
 sessions/*
 instances/*
-instance_generation/__pycache__/*
 simulated/*
+irace_results/*
+irace_results.*
+old_irace_results/*
+test_elite_configs/*
+!test_elite_configs/.gitkeep
+steps_full/
+alt_exp_results_bak
+
+# alt_exp_results/ holds small committed result files, so its .log and .csv stay tracked
 *.log
 !/alt_exp_results/*.log
-*.pkl
-irace_results/*
-old_irace_results/*
-alt_exp_results_bak
+
+# --- outputs: everything the notebooks and final_experimentation/ scripts emit ---------
+tables/
 *.tex
+*.pkl
+plots/*.png
+# the summary CSVs written at the repository root (alt_exp_results/*.csv are tracked)
+/*.csv
+
+# --- packaged deliverables, built for Zenodo and far too large to track ---------------
+*.zip
+
+# --- local scratch, superseded runs and working notes ---------------------------------
+# review-response analysis, not part of reproducing the paper
+scripts/arriaga_scan.R
+*.INVALID-*
+*.published
+*.retuned-extra
+CLAUDE.md
+TODO/
+
+# --- environments and caches ----------------------------------------------------------
+.venv/
+__pycache__/
+.ipynb_checkpoints/
