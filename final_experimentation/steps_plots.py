@@ -24,6 +24,7 @@ Usage:
 import argparse
 import glob
 import gzip
+import math
 import json
 import os
 
@@ -158,6 +159,14 @@ def figure_servers_in_use(data, size, capacity, instance, out, suffix="", depth=
 VIEWERS_COLOR = "#7B3294"
 
 
+def _sci_tick(value, _pos):
+    """Format a tick as "5.0e4" / "1.0e5", the way the manuscript's figure labels them."""
+    if value == 0:
+        return "0"
+    exponent = int(math.floor(math.log10(abs(value))))
+    return f"{value / 10 ** exponent:.1f}e{exponent}"
+
+
 def figure_servers_combined(data, size, capacity, instance, out, suffix=""):
     """Servers in use and viewer demand on one axes, as the manuscript's Figure 4.
 
@@ -189,17 +198,13 @@ def figure_servers_combined(data, size, capacity, instance, out, suffix=""):
              linestyle="--", label="# Viewers")
     ax2.set_ylabel("# Viewers")
     # Big and medium instances run to six figures, and "140000" repeated down the right
-    # margin costs more width than the curve does. Scientific notation moves the exponent
-    # into a single offset label and gives that width back to the plot. Small instances
-    # peak in the thousands, where plain numbers are both shorter and easier to read.
+    # margin costs more width than the curve does. Each tick carries its own exponent
+    # instead -- "5.0e4", "1.0e5" -- which is how the manuscript's figure reads; an
+    # offset "x10^5" above the axis would be narrower still, but it puts the magnitude
+    # somewhere the reader has to go and find. Small instances peak in the thousands,
+    # where plain numbers are both shorter and easier to read.
     if float(ref["viewers"].max()) >= 1e4:
-        fmt = matplotlib.ticker.ScalarFormatter(useMathText=True)
-        fmt.set_scientific(True)
-        fmt.set_powerlimits((0, 0))
-        ax2.yaxis.set_major_formatter(fmt)
-        # The default locator gives only two ticks once the labels are this short, which
-        # is too coarse to read the demand curve against.
-        ax2.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(nbins=5))
+        ax2.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(_sci_tick))
 
     handles = ax.get_lines() + ax2.get_lines()
     # Framed, as the manuscript's figure has it: the legend sits above the axes on white,
