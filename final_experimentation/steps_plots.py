@@ -150,6 +150,54 @@ def figure_servers_in_use(data, size, capacity, instance, out, suffix="", depth=
     print(f"  wrote {p}")
 
 
+# Colour for the viewer demand curve on the combined figure.  It has to read as "not a
+# strategy", so it sits outside STRATEGY_COLOR and is drawn dashed.
+VIEWERS_COLOR = "#7B3294"
+
+
+def figure_servers_combined(data, size, capacity, instance, out, suffix=""):
+    """Servers in use and viewer demand on one axes, as the manuscript's Figure 4.
+
+    Servers go on the left axis and viewers on a twin right axis.  The two quantities
+    differ by three orders of magnitude, so a twin axis invites the reader to see a
+    crossing point that does not exist -- but the figure is a subfloat in a paper with a
+    hard page limit, and stacking the panels costs roughly twice the height for a
+    comparison the caption already makes in words.  The viewer curve is dashed and in a
+    colour no strategy uses, so it does not read as a fourth strategy.
+
+    `figure_servers_in_use` keeps the stacked-panel form, which is the better one to read
+    off screen and the only one that can carry the depth panel.
+    """
+    if not data:
+        return
+    fig, ax = plt.subplots(figsize=(FIG_W, FIG_W * 0.46))
+    for alg, s in sorted(data.items()):
+        ax.plot(s["timestamp"] / 3600.0, s["n_servers_current"],
+                color=STRATEGY_COLOR[alg], label=f"Strategy {alg}")
+    ax.set_ylabel("Servers in use")
+    ax.set_xlabel("Time (hours)")
+    ax.grid(True, lw=0.3, alpha=0.4)
+
+    # Viewer demand is a property of the instance, not of the strategy: every series
+    # carries the same curve, so draw it once.
+    ref = data[sorted(data)[0]]
+    ax2 = ax.twinx()
+    ax2.plot(ref["timestamp"] / 3600.0, ref["viewers"], color=VIEWERS_COLOR,
+             linestyle="--", label="# Viewers")
+    ax2.set_ylabel("# Viewers")
+
+    handles = ax.get_lines() + ax2.get_lines()
+    ax.legend(handles, [h.get_label() for h in handles], ncol=2, frameon=False,
+              loc="lower center", bbox_to_anchor=(0.5, 1.0),
+              columnspacing=0.9, handlelength=1.6)
+    fig.tight_layout(pad=0.3)
+    p = f"{out}/plots/servers_in_use_{size}_{capacity}{suffix}.png"
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    fig.savefig(p, dpi=DPI, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  wrote {p}")
+
+
 def figure_depth_over_time(data, size, capacity, instance, out, suffix=""):
     if not data:
         return
@@ -198,7 +246,9 @@ def main():
     ap.add_argument("--end", type=float, help="window end, seconds of simulated time")
     ap.add_argument("--suffix", default="", help="appended to output filenames")
     ap.add_argument("--no-depth-panel", action="store_true",
-                    help="two-panel figure, as in the manuscript")
+                    help="two-panel figure: viewers and servers, no depth panel")
+    ap.add_argument("--combined", action="store_true",
+                    help="one axes with viewers on a twin right axis, as the paper's Figure 4")
     args = ap.parse_args()
 
     df = drop_infeasible(load_summaries(args.summaries), args.stats)
@@ -208,8 +258,12 @@ def main():
         for cap in args.capacities:
             data = collect(df, args.series, size, cap, args.instance, winners,
                            args.start, args.end)
-            figure_servers_in_use(data, size, cap, args.instance, args.out, args.suffix,
-                                  depth=not args.no_depth_panel)
+            if args.combined:
+                figure_servers_combined(data, size, cap, args.instance, args.out,
+                                        args.suffix)
+            else:
+                figure_servers_in_use(data, size, cap, args.instance, args.out,
+                                      args.suffix, depth=not args.no_depth_panel)
             figure_depth_over_time(data, size, cap, args.instance, args.out, args.suffix)
 
 

@@ -608,6 +608,22 @@ python3 final_experimentation/depth_analysis.py   --summaries steps_full/summary
 python3 final_experimentation/steps_plots.py      --series steps_full/series --out tables
 ```
 
+`steps_plots.py` draws each figure as stacked panels by default — viewers, servers in use
+and interconnection depth on a shared time axis — which is the clearer form to read on
+screen. The manuscript's Figure 4 is the compact form: servers in use on the left axis and
+viewer demand dashed on a twin right axis, one axes per instance size, windowed to hours
+2–6:
+
+```bash
+python3 final_experimentation/steps_plots.py --out tables --instance 30 \
+    --start 7200 --end 21600 --combined --suffix _paper
+```
+
+A twin axis lets a reader see a crossing point between two quantities that differ by three
+orders of magnitude, so `--combined` is a deliberate concession to the page limit rather
+than the better chart; the viewer curve is dashed and in a colour no strategy uses so it
+does not read as a fourth strategy. `--no-depth-panel` gives the two-panel form in between.
+
 | Script                | Reads                                                | Writes                                                                                                                                                       |
 | --------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `final_evaluation.py` | `test_elite_configs/*.log`                           | `alt_results*.tex`, `winners_global.tex`, `alg_comparison_*.tex`, `costs_all.tex`, `best_elite_runs.csv`, `winners.json`                                     |
