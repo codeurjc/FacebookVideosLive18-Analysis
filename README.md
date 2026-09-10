@@ -6,14 +6,18 @@ The complete reproduction package can be found in Zenodo ([https://doi.org/10.52
 
 ```
 .
-├── instance-generation.zip         # Scripts used to generate random instances based on FacebookVideosLive18 dataset
+├── instance_generation.zip         # Scripts used to generate random instances based on FacebookVideosLive18 dataset
 ├── instances.zip                   # Instances generated for the experiments in the paper, separated by instance size.
-├── llls-simulator.zip              # Simulator source code
+├── llls-simulator.zip              # Simulator source code, including the offline MILP model
 ├── irace_results.zip               # irace results from the experiments in the paper (parameter evaluation results)
 ├── test_elite_configs.zip          # Final evaluation results
-├── simulated.zip                   # Detailed simulation results used for plotting in the paper
 ├── steps_full.zip                  # Reduced per-step data: one summary record and one decimated
 │                                   # series per run of the final evaluation grid
+├── mediasoup-LLLS-experiments.zip  # Testbed source code for the per-hop latency campaign
+├── hop_latency.zip                 # Per-hop latency measurements: per-run OCR output, statistics and fit
+├── hop_latency_recordings_480p.zip     # Screen recordings the OCR step reads, one archive
+├── hop_latency_recordings_720p.zip     # per resolution. Only needed to re-run the OCR step;
+├── hop_latency_recordings_1080p.zip    # hop_latency.zip already carries its output.
 ├── analysis.zip                    # Analysis scripts and Jupyter Notebooks
 └── README.md                       # This file
 ```
@@ -30,14 +34,16 @@ This repository contains scripts and notebooks for analyzing live video data fro
     - [Two machines](#two-machines)
     - [Holding races back, and draining a machine](#holding-races-back-and-draining-a-machine)
     - [When a race dies mid-flight](#when-a-race-dies-mid-flight)
-    - [When a race dies in post-selection](#when-a-race-dies-in-post-selection)
     - [Picking the elite configurations for the final evaluation](#picking-the-elite-configurations-for-the-final-evaluation)
   - [Final evaluation](#final-evaluation)
     - [When the final evaluation stalls](#when-the-final-evaluation-stalls)
     - [The single-instance sample behind Table 6 and Figure 4](#the-single-instance-sample-behind-table-6-and-figure-4)
   - [Reducing the per-step archives](#reducing-the-per-step-archives)
+- [Competitive ratio and the offline optimum](#competitive-ratio-and-the-offline-optimum)
+- [Per-hop latency on real media servers](#per-hop-latency-on-real-media-servers)
 - [Analysis](#analysis)
   - [Final experimentation (scripted)](#final-experimentation-scripted)
+  - [Interconnection depth in milliseconds](#interconnection-depth-in-milliseconds)
   - [Notebooks](#notebooks)
 
 ## Requirements
@@ -61,11 +67,28 @@ Both steps are long and want a large machine: the tuning grid is about 6,800 cor
 the final evaluation writes several hundred GB of per-step archives. Sizes and timings quoted
 below were measured on a 64-core, 118 GB machine with an 800 GB data volume.
 
+For the offline optimum (competitive ratio study):
+
+- Java 21 and Maven 3.9, as for the final evaluation
+- Gurobi 11 with a valid licence, reachable from Maven. Gurobi is commercial; an academic
+  licence is free. Only this step needs it --- every other step runs without a solver.
+
+For the per-hop latency campaign:
+
+- An AWS account, and the testbed code in `mediasoup-LLLS-experiments.zip`. This step
+  launches and terminates EC2 instances and therefore costs real money; the campaign in the
+  paper is 195 runs over about 6.3 hours. The derived measurements are shipped with the
+  package, so this step only needs re-running to re-measure, not to re-analyse.
+
 For data analysis:
 
 - Windows 10 (Ubuntu 22.04 can also be used)
 - Python 3.11
 - R 4.5.0 with irace 4.2.0 package installed
+
+Note that one analysis step, the per-viewer latency distribution, reads the instance event
+streams and therefore needs `instances.zip` unpacked (about 100 GB uncompressed). Every other
+analysis step works from `steps_full.zip` and `test_elite_configs.zip` alone.
 
 ## Instance generation
 
@@ -584,9 +607,134 @@ exactly over every row of the CSV:
 - `depth_time_hist`, `avg_depth_time_hist` — seconds held at each depth, which give exact
   time-weighted percentiles rather than sampled ones.
 
-Each **series** file is the per-step CSV decimated by row index — the same sampling
-`simulated.ipynb` did with `sample_rate=100`, but with the stride chosen per run so every
-series lands at 20k-40k rows regardless of instance size.
+Each **series** file is the per-step CSV decimated by row index, with the stride chosen per run
+so every series lands at 20k-40k rows regardless of instance size.
+
+## Competitive ratio and the offline optimum
+
+Section 5.5 of the paper compares the three online strategies against an offline optimum. Two
+artifacts back it, and both are produced from the simulator source in `llls-simulator.zip`,
+which carries the mixed-integer model alongside the strategies.
+
+**Exact optima on tiny instances.** The optimum is only attainable on instances small enough
+for a solver, so the study uses a replicated factorial design of 108 cells varying capacity,
+number of concurrent sessions, load multiple, dwell-time distribution and churn. The instances
+are generated by `SyntheticInstanceGenerator`, which is deterministic given its seed, so they
+are regenerated by the study rather than shipped; the seeds are recorded alongside the design.
+
+```bash
+# in the unpacked simulator
+mvn -q package -DskipTests
+./model/experiments/run-competitive-ratio-study.sh --dry-run   # print the plan
+./model/experiments/run-competitive-ratio-study.sh             # every stage, in order
+```
+
+The script is staged and resumable: a stage that finishes leaves a stamp in
+`model/experiments/.rerun-state` and is skipped on relaunch, and the factorial stage resumes
+cell by cell. `--restart` discards the stamps. Budget roughly 12 hours in total; the factorial
+stage alone is about 6 hours at the default 300 s solve limit.
+
+**LB0 bounds on the real instances.** The optimum cannot be computed for the instances derived
+from FacebookVideosLive18, so the paper bounds it from below with LB0, a counting bound that
+needs one pass over each instance and no solver. The `traces` stage of the same script computes
+it for all 120 instances at the four capacities.
+
+Both sets of results are version-controlled inside the simulator repository, so they ship in
+`llls-simulator.zip` under `model/experiments/`:
+
+| Path | Contents |
+|---|---|
+| `factorial/design.csv` | the 108 cells, with the parameters and the seed of each |
+| `factorial/observations.csv` | one row per cell and strategy: cost, optimum, ratio, solve status |
+| `factorial/cells.jsonl`, `factorial/summary.json` | per-cell solver detail and the aggregate |
+| `real-traces/real-traces.csv` | one row per instance, capacity and strategy: LB0, cost, ratio upper bound |
+| `real-traces/by-instance/` | the per-run detail behind each row |
+| `*.md` | the reports interpreting the two studies |
+
+The paper's Tables 7 and 8 are transcribed from `model/experiments/factorial/observations.csv`
+and `model/experiments/real-traces/real-traces.csv` respectively.
+
+## Per-hop latency on real media servers
+
+The paper converts interconnection depth into milliseconds using a per-hop cost measured on
+real media servers rather than assumed. `hop_latency.zip` contains that campaign: the testbed
+code, the per-run measurements and the fit.
+
+The testbed chains *N* mediasoup media servers, one per EC2 virtual machine, all in one AWS
+region and forwarding between themselves over the provider's internal network. A browser
+publishes a video whose frames carry a visible sequence number into the head of the chain and
+subscribes from the tail; the screen is recorded, and the two sequence numbers visible at any
+instant give the end-to-end latency of the whole chain. The campaign is 195 runs: 13 chain
+lengths from 1 to 150 servers, three resolutions (480p, 720p, 1080p) and five repetitions,
+with the chain lengths visited in a seeded random order and the browser in the same region as
+the servers.
+
+Re-running the campaign costs money and needs an AWS account; re-deriving the number from the
+shipped measurements does not:
+
+```bash
+# fit the per-hop slope from the per-run measurements
+python3 analysis/fit_hop_latency.py --results campaign_results \
+    --min-fps 27 --out-prefix campaign_results/fit-final
+
+# the robustness checks reported in the paper
+python3 analysis/robustness_checks_v2.py \
+    --runs campaign_results/fit-final_runs.csv \
+    --manifest campaign_results/campaign-manifest.csv
+```
+
+This yields the per-hop cost the paper quotes, **0.091 ms/hop, 95 % CI [0.054, 0.127]**. Two
+limits on how that number may be used, both established by the campaign itself: the slope is
+only resolvable over long chains --- below roughly 60 hops the predicted increase is smaller
+than the run-to-run variability of the measurement --- and it was identified over 0 to 149
+hops, so any depth beyond that is extrapolation.
+
+`hop_latency.zip` unpacks to `campaign_results/`, one directory per (resolution, chain length,
+repetition), holding the per-frame OCR output (`ocr_results.csv`) and the WebRTC statistics of
+the run (`stats/`), together with `campaign-manifest.csv` --- which records the seeded random
+order the cells were visited in --- and the fit outputs.
+
+The screen recordings the OCR step reads are shipped separately, one archive per resolution
+(`hop_latency_recordings_480p.zip` and its 720p and 1080p siblings, 14 to 18 GB each). You only
+need them to re-run the OCR step; `hop_latency.zip` already carries its output.
+
+Unpack the recordings over the same `campaign_results/` tree, so each recording sits next to the
+`ocr_results.csv` it produced, and read the frame counters back out with `rtt_analyzer.py`. The
+OCR crop rectangles differ per resolution because the frame counter sits at a different place in
+each capture, so they have to be passed explicitly:
+
+```bash
+crops_for() {   # "<presenter rect> <viewer rect>", as left,top,right,bottom
+    case "$1" in
+        480p)  echo "905,526,1023,544 905,921,1023,939" ;;
+        720p)  echo "902,525,1026,544 903,921,1026,939" ;;
+        1080p) echo "903,525,1026,544 903,920,1026,939" ;;
+    esac
+}
+
+for rec in campaign_results/*/*_workers/try_*/recordings/*.mp4; do
+    try_dir=$(dirname "$(dirname "$rec")")
+    [ -f "$try_dir/ocr_results.csv" ] && continue          # idempotent: skip what is done
+    res=$(echo "$rec" | cut -d/ -f2)
+    crops=$(crops_for "$res")
+    python3 qoe_scripts/rtt_analyzer.py --video "$rec" \
+        --ocr_presenter_coordinates "${crops%% *}" \
+        --ocr_viewer_coordinates "${crops##* }" \
+        --max_frame_count 3600 \
+        --output "$try_dir/ocr_results.csv"
+done
+```
+
+`--output` is not optional: `rtt_analyzer.py` writes beside the video by default, while
+`fit_hop_latency.py` reads `try_<i>/ocr_results.csv`. `--max_frame_count` must match the media
+--- 3600 for the 130 s files used in this campaign --- because readings above it are treated as
+OCR errors. Budget roughly two minutes per recording, about 6.5 hours for the 195-run grid, and
+run it on a machine that is not recording anything.
+
+The testbed source itself is in `mediasoup-LLLS-experiments.zip`, and every command in this
+section runs from its root. `analysis/collect_and_ocr.sh` does the same job during a live
+campaign, pulling finished runs off the client as they complete, and needs `--host`; it is not
+the path to use on an unpacked package.
 
 ## Analysis
 
@@ -666,6 +814,58 @@ short, shallow runs and drag every average down, so `depth_analysis.py` and `ste
 read `best_elite_runs.csv` and drop every run the evaluation log reports as an error. That is
 why they must be run after `final_evaluation.py`.
 
+### Interconnection depth in milliseconds
+
+`depth_analysis.py` reports interconnection depth in media server levels. The paper reports it
+in milliseconds, using the per-hop cost measured in
+[Per-hop latency on real media servers](#per-hop-latency-on-real-media-servers). A session on a
+single media server has depth 1, so a viewer on the deepest level of a tree of depth *d* is
+*d-1* server hops from its publisher, and the latency that interconnection adds is
+`beta * (depth - 1)` with `beta = 0.091` ms/hop.
+
+Three scripts do the conversion. They read the winner of each strategy from `winners.json`, so
+run `final_evaluation.py` first.
+
+```bash
+# distribution over aggregate viewing time -- needs only the reduced per-step data
+python3 final_experimentation/viewer_latency_dist.py \
+    --root steps_full --winners tables/winners.json --out tables
+
+# distribution over VIEWERS, each counted once -- also needs the instance event streams
+python3 final_experimentation/per_viewer_latency.py \
+    --sizes small medium big --instances instances --out tables
+
+# the manuscript's figure, drawn from the histograms the previous script writes
+python3 final_experimentation/per_viewer_plot.py \
+    --hists tables/per_viewer_hists.npz --out tables/plots
+```
+
+| Script | Reads | Writes |
+| --- | --- | --- |
+| `viewer_latency_dist.py` | `steps_full/{summary,series}`, `tables/winners.json` | `tables/viewer_latency_percentiles.txt`, `plots/viewer_latency_*.png` |
+| `per_viewer_latency.py` | `instances/`, `steps_full/`, `tables/winners.json` | `tables/per_viewer_latency.txt`, `tables/per_viewer_hists.npz` |
+| `per_viewer_plot.py` | `tables/per_viewer_hists.npz` | `plots/per_viewer_latency_violin.png` |
+
+The difference between the first two is the weighting, and it is worth being explicit about
+because they answer different questions. `viewer_latency_dist.py` weights each interval by
+`viewers x dt`, so it reports how much of the aggregate *viewing time* is spent at each
+latency. `per_viewer_latency.py` reconstructs every viewer's own join-to-leave interval from
+the instance event stream, averages the depth over exactly that interval, and gives each viewer
+one observation regardless of how long it stayed --- which is what "x % of viewers" means. The
+paper reports the per-viewer form; the figure it prints is
+`plots/per_viewer_latency_violin.png`, copied into the manuscript as
+`images/plots/per_viewer_latency.png`.
+
+Two practical notes. `per_viewer_latency.py` streams roughly 22 GB of instance CSVs and takes
+about 40 minutes, dominated by the big instances; it holds only the currently-connected viewers
+in memory and accumulates results into fixed histograms, so its memory use does not grow with
+the 899 million viewer observations it aggregates. And both scripts report a bracket rather
+than a single number: the simulator records the depth of the session *trees*, not the level at
+which each viewer attached, so the upper-bound row charges every viewer the deepest tree on the
+platform while it was connected and the central-estimate row charges the mean depth over the
+live trees. A viewer inside a tree of depth *d* actually sits between 0 and *d-1* hops down, so
+the true distribution lies between the two rows and closer to the lower one.
+
 ### Notebooks
 
 The notebooks are for exploratory analysis:
@@ -680,8 +880,5 @@ The notebooks are for exploratory analysis:
 └── test_elite_configs/         # final evaluation logs
 ```
 
-- `simulated.ipynb`: analysis of full-resolution `STEPS_FULL` CSVs in
-  `simulated/`. Superseded by `steps_plots.py` for the paper's figures, but still the way to
-  look at a single run at full resolution.
 - `instances.ipynb`, `sessions.ipynb`: per-instance and per-session statistics of the
   generated dataset.
