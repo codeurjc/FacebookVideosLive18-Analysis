@@ -19,6 +19,8 @@ SIZES = ["small", "medium", "big"]
 CAPACITIES = [50, 150, 650, 1000]
 # ordinal ramp (capacity is an ordered magnitude); passes validate_palette.js --ordinal
 CAP_COLOR = {50: "#0d366b", 150: "#1c5cab", 650: "#3987e5", 1000: "#86b6ef"}
+# the pooled panel is not a capacity, so it stays off the ordinal ramp
+POOLED_COLOR = "#555555"
 YTOP = 36.0
 # Print target: all text black on a pure-white ground, so the figure stays legible
 # on paper. The grid is the one recessive element, kept light but dark enough to print.
@@ -113,7 +115,14 @@ def main():
                     t = max(t, float(ms(d).max()))
         tops[size] = t * 1.06
 
-    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.05))
+    # Pooled panel: every viewer of every size and capacity, each counted once. Summing the
+    # histograms is exact (same bins, integer viewer counts); its percentiles are the
+    # headline figures quoted in the manuscript text.
+    pooled = sum(z[k].astype(float) for k in
+                 (f"{s}_{c}_{args.which}" for s in SIZES for c in CAPACITIES) if k in z)
+
+    fig, axes = plt.subplots(1, 4, figsize=(7.2, 2.05),
+                             gridspec_kw={"width_ratios": [4, 4, 4, 1.5]})
     for ax, size in zip(axes, SIZES):
         for i, cap in enumerate(CAPACITIES):
             key = f"{size}_{cap}_{args.which}"
@@ -126,6 +135,15 @@ def main():
         ax.set_title(size, fontsize=9.5, color=INK, pad=3)
         ax.set_xlabel("media server capacity $C$", fontsize=8.5, color=MUTED, labelpad=2)
         ax.set_ylim(0, tops[size])
+    pax = axes[-1]
+    d, w = depths_weights(pooled)
+    violin(pax, 0, d, w, POOLED_COLOR)
+    pax.set_xlim(-0.6, 0.6)
+    pax.set_xticks([0]); pax.set_xticklabels(["pooled"])
+    pax.set_title("all sizes", fontsize=9.5, color=INK, pad=3)
+    pax.set_xlabel("all $C$", fontsize=8.5, color=MUTED, labelpad=2)
+    pax.set_ylim(0, float(ms(d).max()) * 1.06)
+    for ax in axes:
         ax.grid(axis="y", color=GRID, lw=0.6, zorder=0); ax.set_axisbelow(True)
         for s in ("top", "right"):
             ax.spines[s].set_visible(False)

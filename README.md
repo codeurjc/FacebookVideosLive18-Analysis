@@ -37,7 +37,7 @@ This repository contains scripts and notebooks for analyzing live video data fro
     - [Picking the elite configurations for the final evaluation](#picking-the-elite-configurations-for-the-final-evaluation)
   - [Final evaluation](#final-evaluation)
     - [When the final evaluation stalls](#when-the-final-evaluation-stalls)
-    - [The single-instance sample behind Table 6 and Figure 4](#the-single-instance-sample-behind-table-6-and-figure-4)
+    - [The single-instance sample behind Table 6 and Figure 5](#the-single-instance-sample-behind-table-6-and-figure-5)
   - [Reducing the per-step archives](#reducing-the-per-step-archives)
 - [Competitive ratio and the offline optimum](#competitive-ratio-and-the-offline-optimum)
 - [Per-hop latency on real media servers](#per-hop-latency-on-real-media-servers)
@@ -489,7 +489,7 @@ a multi-GB uncompressed CSV until it finishes and up to 32 of them run at once.
 `System.nanoTime()` when the flag is absent, so a parameter file without `--seed` gives every
 one of its runs a different random seed: the results are not reproducible, and configurations
 are no longer compared on equal footing. All three `run-alg-parameters.txt.alg{a,b,c}` files
-now end each line with `--seed 12345`; keep that when adding configurations. The seed appears
+end each line with `--seed 12345`; keep that when adding configurations. The seed appears
 in the output filename, which is the quickest way to check a run actually used it.
 
 **`java` must be on `PATH`.** The script shells out to `java` directly, so a non-interactive
@@ -554,7 +554,7 @@ Two things to check afterwards:
   and `sort -u` on that list must give the same number — a duplicate is silently double-counted
   by the reduction.
 
-#### The single-instance sample behind Table 6 and Figure 4
+#### The single-instance sample behind Table 6 and Figure 5
 
 The paper's peak-concurrency table and its servers-in-use figure are drawn from **instance
 30 only**, for the winning configuration of each of the three strategies. The Strategy C
@@ -593,6 +593,7 @@ roughly the core count. This turns 457 GB into about 800 MB:
 steps_full/
 ├── index/<archive>.jsonl        # member -> byte offset, so a run can be read without rescanning
 ├── summary/<archive>.jsonl      # one record per run (see below)
+├── summary/<archive>/shard-*.jsonl   # the same records, before the shards are concatenated
 └── series/<archive>/*.csv.gz    # one decimated per-step series per run
 ```
 
@@ -612,7 +613,7 @@ so every series lands at 20k-40k rows regardless of instance size.
 
 ## Competitive ratio and the offline optimum
 
-Section 5.5 of the paper compares the three online strategies against an offline optimum. Two
+Section 5.7 of the paper compares the three online strategies against an offline optimum. Two
 artifacts back it, and both are produced from the simulator source in `llls-simulator.zip`,
 which carries the mixed-integer model alongside the strategies.
 
@@ -651,14 +652,15 @@ Both sets of results are version-controlled inside the simulator repository, so 
 | `real-traces/by-instance/` | the per-run detail behind each row |
 | `*.md` | the reports interpreting the two studies |
 
-The paper's Tables 7 and 8 are transcribed from `model/experiments/factorial/observations.csv`
+The paper's Tables 4 and 5 are transcribed from `model/experiments/factorial/observations.csv`
 and `model/experiments/real-traces/real-traces.csv` respectively.
 
 ## Per-hop latency on real media servers
 
 The paper converts interconnection depth into milliseconds using a per-hop cost measured on
-real media servers rather than assumed. `hop_latency.zip` contains that campaign: the testbed
-code, the per-run measurements and the fit.
+real media servers rather than assumed. The campaign ships as two archives:
+`mediasoup-LLLS-experiments.zip` holds the testbed code and the analysis scripts, and
+`hop_latency.zip` holds the per-run measurements and the fit outputs.
 
 The testbed chains *N* mediasoup media servers, one per EC2 virtual machine, all in one AWS
 region and forwarding between themselves over the provider's internal network. A browser
@@ -689,10 +691,18 @@ only resolvable over long chains --- below roughly 60 hops the predicted increas
 than the run-to-run variability of the measurement --- and it was identified over 0 to 149
 hops, so any depth beyond that is extrapolation.
 
-`hop_latency.zip` unpacks to `campaign_results/`, one directory per (resolution, chain length,
-repetition), holding the per-frame OCR output (`ocr_results.csv`) and the WebRTC statistics of
-the run (`stats/`), together with `campaign-manifest.csv` --- which records the seeded random
-order the cells were visited in --- and the fit outputs.
+`hop_latency.zip` unpacks to `campaign_results/<resolution>/<N>_workers/try_<i>/`, one directory
+per (resolution, chain length, repetition). Each holds the per-frame OCR output
+(`ocr_results.csv`) and the WebRTC statistics of the run (`stats/`, one CSV per media server
+plus `stats.json`); `recordings/` is empty until the recording archives are unpacked over it.
+Beside those directories:
+
+| File | Contents |
+|---|---|
+| `campaign-manifest.csv` | one row per attempt: the seeded random visiting order (seed 20260828), status, start/finish times. It has 204 rows --- the 195 completed runs plus 9 attempts marked `failed` that were retried |
+| `campaign.log` | the driver's log for the whole campaign |
+| `fit-final.txt`, `fit-final_fits.csv`, `fit-final_runs.csv` | the fit's report, per-resolution fits and per-run medians |
+| `fit-final_beta.tex`, `fit-final_rtt_vs_hops.png` | the per-hop cost as the paper quotes it, and its plot |
 
 The screen recordings the OCR step reads are shipped separately, one archive per resolution
 (`hop_latency_recordings_480p.zip` and its 720p and 1080p siblings, 14 to 18 GB each). You only
@@ -758,7 +768,7 @@ python3 final_experimentation/steps_plots.py      --series steps_full/series --o
 
 `steps_plots.py` draws each figure as stacked panels by default — viewers, servers in use
 and interconnection depth on a shared time axis — which is the clearer form to read on
-screen. The manuscript's Figure 4 is the compact form: servers in use on the left axis and
+screen. The manuscript's Figure 5 is the compact form: servers in use on the left axis and
 viewer demand dashed on a twin right axis, one axes per instance size, windowed to hours
 2–6:
 
@@ -852,7 +862,7 @@ because they answer different questions. `viewer_latency_dist.py` weights each i
 latency. `per_viewer_latency.py` reconstructs every viewer's own join-to-leave interval from
 the instance event stream, averages the depth over exactly that interval, and gives each viewer
 one observation regardless of how long it stayed --- which is what "x % of viewers" means. The
-paper reports the per-viewer form; the figure it prints is
+paper reports the per-viewer form; the figure it prints (Figure 4) is
 `plots/per_viewer_latency_violin.png`, copied into the manuscript as
 `images/plots/per_viewer_latency.png`.
 
@@ -870,7 +880,7 @@ the true distribution lies between the two rows and closer to the lower one.
 
 The notebooks are for exploratory analysis:
 
-- `irace.ipynb`: analysis of the parameter evaluation step (and the original notebook
+- `irace.ipynb`: analysis of the parameter evaluation step (and a notebook
   version of the final evaluation). It needs R 4.5 with irace 4.2.0 through `rpy2`, and
   expects:
 
