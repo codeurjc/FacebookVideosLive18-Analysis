@@ -15,9 +15,6 @@ The complete reproduction package can be found in Zenodo ([https://doi.org/10.52
 │                                   # series per run of the final evaluation grid
 ├── mediasoup-LLLS-experiments.zip  # Testbed source code for the per-hop latency campaign
 ├── hop_latency.zip                 # Per-hop latency measurements: per-run OCR output, statistics and fit
-├── hop_latency_recordings_480p.zip     # Screen recordings the OCR step reads, one archive
-├── hop_latency_recordings_720p.zip     # per resolution. Only needed to re-run the OCR step;
-├── hop_latency_recordings_1080p.zip    # hop_latency.zip already carries its output.
 ├── analysis.zip                    # Analysis scripts and Jupyter Notebooks
 └── README.md                       # This file
 ```
@@ -694,7 +691,7 @@ hops, so any depth beyond that is extrapolation.
 `hop_latency.zip` unpacks to `campaign_results/<resolution>/<N>_workers/try_<i>/`, one directory
 per (resolution, chain length, repetition). Each holds the per-frame OCR output
 (`ocr_results.csv`) and the WebRTC statistics of the run (`stats/`, one CSV per media server
-plus `stats.json`); `recordings/` is empty until the recording archives are unpacked over it.
+plus `stats.json`); `recordings/` is empty, because the screen recordings are not in the package (see below).
 Beside those directories:
 
 | File | Contents |
@@ -704,12 +701,12 @@ Beside those directories:
 | `fit-final.txt`, `fit-final_fits.csv`, `fit-final_runs.csv` | the fit's report, per-resolution fits and per-run medians |
 | `fit-final_beta.tex`, `fit-final_rtt_vs_hops.png` | the per-hop cost as the paper quotes it, and its plot |
 
-The screen recordings the OCR step reads are shipped separately, one archive per resolution
-(`hop_latency_recordings_480p.zip` and its 720p and 1080p siblings, 14 to 18 GB each). You only
-need them to re-run the OCR step; `hop_latency.zip` already carries its output.
+The screen recordings the OCR step reads (195 files, about 50 GB) are not part of the package,
+because of Zenodo's size limit. They are available on request from the corresponding authors.
+You only need them to re-run the OCR step; `hop_latency.zip` already carries its output.
 
-Unpack the recordings over the same `campaign_results/` tree, so each recording sits next to the
-`ocr_results.csv` it produced, and read the frame counters back out with `rtt_analyzer.py`. The
+With the recordings unpacked over the same `campaign_results/` tree, so each recording sits next
+to the `ocr_results.csv` it produced, read the frame counters back out with `rtt_analyzer.py`. The
 OCR crop rectangles differ per resolution because the frame counter sits at a different place in
 each capture, so they have to be passed explicitly:
 
