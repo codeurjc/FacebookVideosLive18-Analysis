@@ -2,7 +2,7 @@
 
 Reproduction package for the paper "WebRTC media server interconnection strategies for scalable low-latency live streaming sessions". This description contains detailed steps to reproduce the results on the paper.
 
-The complete reproduction package can be found in Zenodo ([https://doi.org/10.5281/zenodo.17779884](https://doi.org/10.5281/zenodo.17779884)) and contains the following files:
+The complete reproduction package can be found in Zenodo ([https://doi.org/10.5281/zenodo.22922353](https://doi.org/10.5281/zenodo.22922353)) and contains the following files:
 
 ```
 .
