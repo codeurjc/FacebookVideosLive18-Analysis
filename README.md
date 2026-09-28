@@ -20,7 +20,7 @@ The complete reproduction package can be found in Zenodo ([https://doi.org/10.52
 ```
 
 Note: in instances.zip, instances with numbers 0 to 29 correspond to the training set, and instances with numbers 30 to 39 correspond to the test set.
-This repository contains scripts and notebooks for analyzing live video data from FacebookVideosLive18 dataset and generating pseudo randomized instances for simulation.
+This repository contains scripts and notebooks for analyzing live video data from the FacebookVideosLive18 dataset and generating pseudo randomized instances for simulation. The 120 generated instances (40 each of small, medium and big) are collectively the paper's **FacebookLLLS** dataset — a new, publicly available dataset of publisher and viewer join/leave events derived from real Facebook Live sessions. "FacebookVideosLive18" refers to the original raw dataset this repository consumes as input; "FacebookLLLS" is the derived dataset this repository produces and that the paper evaluates against.
 
 ## Index
 
@@ -89,7 +89,7 @@ analysis step works from `steps_full.zip` and `test_elite_configs.zip` alone.
 
 ## Instance generation
 
-You can generate instances using the scripts in `instance_generation.zip`, or use the already generated instances in `instances.zip`. `instance_generation.zip` contains a folder with the necessary scripts for generating new instances. The scripts rely on the FacebookVideosLive18 dataset. The dataset can be downloaded from [here](https://sites.google.com/view/facebookvideoslive18/download?authuser=0). Ensure the datasets are placed in the `data/` directory (download both datasets' full compressed files and unzip them in `data/`). The directory structure should look like this:
+You can generate instances using the scripts in `instance_generation.zip`, or use the already generated instances in `instances.zip`. `instance_generation.zip` contains a folder with the necessary scripts for generating new instances (the FacebookLLLS dataset). The scripts rely on the raw FacebookVideosLive18 dataset. The dataset can be downloaded from [here](https://sites.google.com/view/facebookvideoslive18/download?authuser=0). Ensure the datasets are placed in the `data/` directory (download both datasets' full compressed files and unzip them in `data/`). The directory structure should look like this:
 
 ```
 data/
@@ -888,4 +888,4 @@ The notebooks are for exploratory analysis:
 ```
 
 - `instances.ipynb`, `sessions.ipynb`: per-instance and per-session statistics of the
-  generated dataset.
+  generated FacebookLLLS dataset.
